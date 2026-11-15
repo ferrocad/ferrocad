@@ -488,6 +488,91 @@ class SketchSolverTests(unittest.TestCase):
         self.assertEqual(self.sketch.ConstraintCount, 0)
 
 
+class SketchDragTests(unittest.TestCase):
+    """`drag(geometry, pos, target)`: a soft pull that never becomes a constraint.
+
+    The pull is `SoftPrior` in `ferrocad_sketch_solver`: weighted penalty rows added
+    to the solve and then removed by one hard-only pass. It must move the free
+    degrees of freedom toward the pointer, lose to every hard constraint, and leave
+    the reported DOF and `RedundantConstraints` exactly as `solve()` reports them.
+    """
+
+    def setUp(self):
+        self.document, self.sketch = _document("SketchDrag")
+
+    def tearDown(self):
+        _close(self.document)
+
+    @staticmethod
+    def _ends(sketch, index=0):
+        """A line's two endpoints, sorted, so the order of `Vertexes` does not matter."""
+        points = sorted(tuple(vertex.Point) for vertex in sketch.Geometry[index].Vertexes)
+        return points[0], points[-1]
+
+    def test_drag_moves_a_free_point_without_spending_a_degree_of_freedom(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        self.assertEqual(self.sketch.solve(), 4, "four line parameters")
+
+        dof = self.sketch.drag(0, Sketcher.PointPos.end, App.Vector(2, 3, 0))
+        self.assertEqual(dof, 4, "the pull is a prior, not a constraint")
+        low, high = self._ends(self.sketch)
+        self.assertAlmostEqual(low[0], 0.0, places=6)
+        self.assertAlmostEqual(low[1], 0.0, places=6)
+        self.assertAlmostEqual(high[0], 2.0, places=6)
+        self.assertAlmostEqual(high[1], 3.0, places=6)
+
+    def test_a_hard_constraint_wins_and_the_rank_analysis_is_unchanged(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        # The same row twice: the second adds no rank and is reported redundant.
+        self.sketch.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        self.sketch.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        self.assertEqual(self.sketch.solve(), 3)
+        self.assertEqual(self.sketch.RedundantConstraints, [2])
+
+        dof = self.sketch.drag(0, Sketcher.PointPos.end, App.Vector(7.5, 4, 0))
+        self.assertEqual(dof, 3, "the drag reports the same DOF as solve")
+        self.assertEqual(
+            self.sketch.RedundantConstraints, [2], "prior rows never enter the rank"
+        )
+        low, high = self._ends(self.sketch)
+        self.assertAlmostEqual(low[1], high[1], places=6, msg="still horizontal")
+        self.assertAlmostEqual(high[1], 4.0, places=3, msg="the pull steered y")
+        self.assertAlmostEqual(high[0], 7.5, places=3, msg="the free x followed")
+
+    def test_a_fully_constrained_point_does_not_move(self):
+        self.sketch.addGeometry(_segment((0, 0), (2, 0)), False)
+        self.sketch.addConstraint(
+            [
+                Sketcher.Constraint(
+                    "Coincident", -1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start
+                ),
+                Sketcher.Constraint("Distance", 0, 1, 0, 2, 2.0),
+                Sketcher.Constraint("Horizontal", 0),
+            ]
+        )
+        self.assertEqual(self.sketch.solve(), 0, "fully constrained")
+        before = self._ends(self.sketch)
+
+        self.assertEqual(
+            self.sketch.drag(0, Sketcher.PointPos.end, App.Vector(10, 10, 0)), 0
+        )
+        after = self._ends(self.sketch)
+        for a, b in zip(before, after):
+            for coordinate, (have, want) in enumerate(zip(a, b)):
+                self.assertAlmostEqual(
+                    have, want, places=6, msg=f"corner {coordinate} moved: {before} -> {after}"
+                )
+        self.assertEqual(self.sketch.RedundantConstraints, [])
+
+    def test_a_root_axis_and_a_missing_index_are_refused(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        with self.assertRaises(ValueError) as caught:
+            self.sketch.drag(-1, Sketcher.PointPos.start, App.Vector(1, 1, 0))
+        self.assertIn("root", str(caught.exception))
+        with self.assertRaises(IndexError):
+            self.sketch.drag(4, Sketcher.PointPos.start, App.Vector(1, 1, 0))
+
+
 class SketchPlaneTests(unittest.TestCase):
     """`Draft.make_sketch` asks a wire for its plane; Part answers for it."""
 

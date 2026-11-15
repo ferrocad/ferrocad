@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use ferrocad_core::object_registry::{self, BodyMembership, ObjectType, PropertyChangeError};
 use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, Rotation, prop_status};
-use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector3};
+use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector2, Vector3};
 use ferrocad_geom::{ElementKind, Lineage, Shape, SurfaceSpec};
 use ferrocad_occt::surface_ops;
 use ferrocad_part::{
@@ -2126,11 +2126,13 @@ impl PyPlaneSurface {
 // record in a `ConstraintData` property (a `StringList`, so it persists through
 // the native and `.FCStd` serializers without a new value type): kind, geometry
 // and point references, datum. `addConstraint`/`delConstraint`/`setDatum`/`getDatum`
-// edit that list, `Constraints` decodes it into `Sketcher.Constraint` objects,
-// `solve` checks the references, and `RedundantConstraints` is empty because there
-// is no rank analysis to report. **No numerical solve happens** — geometry is
-// authored, not moved — which is the documented approximation for this slice
-// (P4 SK2 binds PlanGCS).
+// edit that list, `Constraints` decodes it into `Sketcher.Constraint` objects, and
+// **the sketch is solved**: `solve()` and every recompute run the constraints
+// through `ferrocad_sketch_solver`, write the moved geometry back, and report the
+// remaining degrees of freedom. `RedundantConstraints`/`ConflictingConstraints`
+// come from that solve's rank analysis. `drag(geometry, pos, target)` is the same
+// solve with one soft `SoftPrior` row: it moves a point toward the pointer without
+// becoming a constraint, so the DOF count and the redundancy set do not change.
 //
 // The encoding is `kind;first=#g2;firstPos=2;second=#g1;secondPos=1` with a
 // trailing `;name=…` when named; a root reference is a bare negative int and a
@@ -3020,14 +3022,52 @@ fn solve_geometry(
     state: &SketchGeometryState,
     constraints: &[SketchConstraint],
 ) -> PyResult<Option<ferrocad_sketch_solver::Solution>> {
+    solve_geometry_with(state, constraints, &[])
+}
+
+/// [`solve_geometry`] with optional soft drag priors.
+///
+/// A prior is a penalty row, so it steers the free degrees of freedom without
+/// entering the rank analysis: the returned solution's `dof`, `redundant` and
+/// `conflicting` describe the hard constraints alone.
+fn solve_geometry_with(
+    state: &SketchGeometryState,
+    constraints: &[SketchConstraint],
+    priors: &[ferrocad_sketch_solver::SoftPrior],
+) -> PyResult<Option<ferrocad_sketch_solver::Solution>> {
     let curves = crate::sketch_solver::curves_of(&state.shapes);
     let Ok(converted) = crate::sketch_solver::constraints_of(constraints, &state.ids) else {
         return Ok(None);
     };
-    match ferrocad_sketch_solver::solve(&curves, &converted) {
+    match ferrocad_sketch_solver::solve_with_priors(&curves, &converted, priors) {
         Ok(solution) => Ok(Some(solution)),
         Err(_) => Ok(None),
     }
+}
+
+/// Write a solved state back, when it differs from what is stored.
+///
+/// Only a real movement writes: an already-solved system must not re-touch the
+/// object, or a drag that changes nothing would still dirty the document. The
+/// stable ids and construction flags are preserved by position.
+fn write_solved_geometry(
+    object: &Bound<'_, PyAny>,
+    state: &SketchGeometryState,
+    solution: &ferrocad_sketch_solver::Solution,
+) -> PyResult<()> {
+    let original = crate::sketch_solver::curves_of(&state.shapes);
+    if solution.curves == original {
+        return Ok(());
+    }
+    let shapes = crate::sketch_solver::shapes_of(&solution.curves, &state.shapes);
+    write_geometry(
+        object,
+        &SketchGeometryState {
+            shapes,
+            ids: state.ids.clone(),
+            construction: state.construction.clone(),
+        },
+    )
 }
 
 /// Commit the pending constraints of `pending_name` into `Constraints`.
@@ -3556,18 +3596,62 @@ fn sketch_solve(object: &Bound<'_, PyAny>) -> PyResult<i32> {
     if !solution.converged {
         return Ok(-1);
     }
-    let original = crate::sketch_solver::curves_of(&state.shapes);
-    if solution.curves.iter().zip(&original).any(|(a, b)| a != b) {
-        let shapes = crate::sketch_solver::shapes_of(&solution.curves, &state.shapes);
-        write_geometry(
-            object,
-            &SketchGeometryState {
-                shapes,
-                ids: state.ids.clone(),
-                construction: state.construction.clone(),
-            },
-        )?;
+    write_solved_geometry(object, &state, &solution)?;
+    Ok(solution.dof as i32)
+}
+
+/// `drag(geometry, pos, target)`: move one sketch point toward `target`, keeping
+/// every hard constraint.
+///
+/// The pull is a **soft prior**, not a constraint: `ferrocad_sketch_solver` adds
+/// weighted penalty rows for the dragged point, solves the combined system, and
+/// then runs one prior-free pass to restore hard feasibility while leaving the
+/// free degrees of freedom where the pull put them. Because the prior never enters
+/// the rank analysis, the returned DOF count and the sketch's
+/// `RedundantConstraints` are the same as before the drag.
+///
+/// `geometry` is the positional GeoId `addConstraint` accepts (a negative root
+/// axis cannot be dragged). `pos` is upstream's `PointPos` (`1` start, `2` end,
+/// `3` mid, `0` the curve itself, which reads as its start). `target` is an
+/// `(x, y)` pair or anything with `x`/`y` (`FreeCAD.Vector`), in the sketch's own
+/// local XY plane.
+///
+/// Returns the remaining degrees of freedom, or `-1` when the system cannot be
+/// built (an unsupported curve, a dangling constraint) or does not converge; in
+/// that case `Geometry` is untouched, so a drag can never corrupt a sketch.
+#[pyfunction]
+#[pyo3(signature = (object, geometry, pos, target))]
+fn sketch_drag(
+    object: &Bound<'_, PyAny>,
+    geometry: isize,
+    pos: i64,
+    target: &Bound<'_, PyAny>,
+) -> PyResult<i32> {
+    require_sketch(object, "drag")?;
+    if geometry < 0 {
+        return Err(PyValueError::new_err(
+            "drag moves a sketch point; the root axes (-1, -2) cannot be dragged",
+        ));
     }
+    let state = read_geometry(object)?;
+    let index = geometry as usize;
+    if index >= state.len() {
+        return Err(PyIndexError::new_err(format!(
+            "geometry index {index} is out of range ({n} geometry element(s))",
+            n = state.len()
+        )));
+    }
+    let (x, y) = curves::vector2d(target)?;
+    let constraints = sketch_constraints(object)?;
+    let prior = crate::sketch_solver::drag_prior(index, pos, Vector2::new(x, y));
+    let Some(solution) = solve_geometry_with(&state, &constraints, std::slice::from_ref(&prior))?
+    else {
+        return Ok(-1);
+    };
+    if !solution.converged {
+        return Ok(-1);
+    }
+    write_solved_geometry(object, &state, &solution)?;
     Ok(solution.dof as i32)
 }
 
@@ -3771,6 +3855,7 @@ fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
     methods.set_item("setDatum", wrap_pyfunction!(sketch_set_datum, m)?)?;
     methods.set_item("getDatum", wrap_pyfunction!(sketch_get_datum, m)?)?;
     methods.set_item("solve", wrap_pyfunction!(sketch_solve, m)?)?;
+    methods.set_item("drag", wrap_pyfunction!(sketch_drag, m)?)?;
     methods.set_item(
         "detectMissingPointOnPointConstraints",
         wrap_pyfunction!(sketch_detect_point_on_point, m)?,

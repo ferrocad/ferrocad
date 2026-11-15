@@ -2,9 +2,9 @@
 //!
 //! These are the three runtime surfaces the upstream Part tests reach through
 //! `TestPartApp.py` and `parttests/TestPartMirror.py`. The sketch here covers the
-//! geometry/`Shape` half and the constraint model: constraints are stored,
-//! diagnosed and reported, but nothing is solved (see
-//! `docs/developer/workbenches/sketch-constraints.md`).
+//! geometry/`Shape` half, the constraint model and the solver: constraints are
+//! stored, solved, diagnosed and reported, and `drag()` is the same solve with one
+//! soft pull (see `docs/developer/workbenches/sketch-constraints.md`).
 //!
 //! Same one-image boot as the other Part tests: `ferrocad` + `Part` as built-ins,
 //! one OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
@@ -327,6 +327,193 @@ fn sketch_constraints_are_stored_diagnosed_and_editable() {
     });
 }
 
+/// A line's two endpoints, sorted by `(x, y)`, so an assertion does not depend on
+/// which end of the edge the kernel calls first.
+fn edge_points(edge: &Bound<'_, PyAny>) -> ((f64, f64), (f64, f64)) {
+    let vertices = edge.getattr("Vertexes").expect("Vertexes");
+    let count = vertices.len().expect("len(Vertexes)");
+    let mut points: Vec<(f64, f64)> = (0..count)
+        .map(|index| {
+            let point = vertices
+                .get_item(index)
+                .expect("vertex")
+                .getattr("Point")
+                .expect("Vertex.Point");
+            let x = point.getattr("x").expect("x").extract().expect("x as f64");
+            let y = point.getattr("y").expect("y").extract().expect("y as f64");
+            (x, y)
+        })
+        .collect();
+    points.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .expect("finite")
+            .then(a.1.partial_cmp(&b.1).expect("finite"))
+    });
+    (points[0], points[1])
+}
+
+fn sketch_edge<'py>(sketch: &Bound<'py, PyAny>, index: usize) -> Bound<'py, PyAny> {
+    sketch
+        .getattr("Geometry")
+        .expect("Geometry")
+        .get_item(index)
+        .expect("a geometry item")
+}
+
+#[test]
+fn sketch_drag_moves_a_free_point_without_spending_a_degree_of_freedom() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchDrag");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 0.0), (1.0, 0.0)), false),
+            )
+            .expect("addGeometry");
+        assert_eq!(
+            attribute::<i64>(&sketch, "solve"),
+            4,
+            "four line parameters, no constraints"
+        );
+
+        // Pull the end point to (2, 3). The pull is a prior, not a constraint: the
+        // DOF count must not move, and the far end has no reason to.
+        assert_eq!(
+            sketch
+                .call_method1("drag", (0, 2, ferrocad_vector(py, 2.0, 3.0, 0.0)))
+                .expect("drag")
+                .extract::<i64>()
+                .expect("dof"),
+            4,
+            "a soft prior does not consume a degree of freedom"
+        );
+        let (low, high) = edge_points(&sketch_edge(&sketch, 0));
+        assert!(
+            low.0.abs() < 1e-6 && low.1.abs() < 1e-6,
+            "the untargeted end stayed: {low:?}"
+        );
+        assert!(
+            (high.0 - 2.0).abs() < 1e-6 && (high.1 - 3.0).abs() < 1e-6,
+            "the dragged end reached the target: {high:?}"
+        );
+
+        // A horizontal line, plus the same constraint twice: the second adds no
+        // rank, so the sketch reports it redundant. A drag must not change that.
+        let horizontal = fake_constraint("Horizontal", 0, 0.0).expect("horizontal");
+        let duplicate = fake_constraint("Horizontal", 0, 0.0).expect("horizontal");
+        sketch
+            .call_method1("addConstraint", (vec![horizontal, duplicate],))
+            .expect("addConstraint");
+        let dof = attribute::<i64>(&sketch, "solve");
+        assert_eq!(dof, 3, "one independent row from the two horizontals");
+        let redundant: Vec<usize> = attribute(&sketch, "RedundantConstraints");
+        assert_eq!(redundant, vec![2], "the duplicate is the redundant one");
+
+        assert_eq!(
+            sketch
+                .call_method1("drag", (0, 2, ferrocad_vector(py, 7.5, 4.0, 0.0)))
+                .expect("drag")
+                .extract::<i64>()
+                .expect("dof"),
+            dof,
+            "the drag reports the same DOF as solve"
+        );
+        assert_eq!(
+            attribute::<Vec<usize>>(&sketch, "RedundantConstraints"),
+            vec![2],
+            "the prior rows never enter the rank analysis"
+        );
+        let (low, high) = edge_points(&sketch_edge(&sketch, 0));
+        assert!(
+            (low.1 - high.1).abs() < 1e-6,
+            "the hard row keeps the line horizontal: {low:?} {high:?}"
+        );
+        assert!(
+            (high.1 - 4.0).abs() < 1e-3,
+            "the pull steered the shared y: {high:?}"
+        );
+        assert!(
+            (high.0 - 7.5).abs() < 1e-3 && low.0.abs() < 1e-6,
+            "the free x followed the pointer: {low:?} {high:?}"
+        );
+
+        close_document(py, "RustSketchDrag");
+    });
+}
+
+#[test]
+fn sketch_drag_cannot_break_a_fully_constrained_point() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchDragLocked");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 0.0), (2.0, 0.0)), false),
+            )
+            .expect("addGeometry");
+        // Start on the origin, length 2, horizontal: four independent rows for four
+        // parameters, so the line is fully constrained.
+        let coincident = fake_record(
+            "Coincident",
+            &[("First", -1), ("FirstPos", 1), ("Second", 0), ("SecondPos", 1)],
+            0.0,
+        )
+        .expect("coincident");
+        let distance = fake_record(
+            "Distance",
+            &[("First", 0), ("FirstPos", 1), ("Second", 0), ("SecondPos", 2)],
+            2.0,
+        )
+        .expect("distance");
+        let horizontal = fake_constraint("Horizontal", 0, 0.0).expect("horizontal");
+        sketch
+            .call_method1("addConstraint", (vec![coincident, distance, horizontal],))
+            .expect("addConstraint");
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 0, "fully constrained");
+        let before = edge_points(&sketch_edge(&sketch, 0));
+
+        assert_eq!(
+            sketch
+                .call_method1("drag", (0, 2, ferrocad_vector(py, 10.0, 10.0, 0.0)))
+                .expect("drag")
+                .extract::<i64>()
+                .expect("dof"),
+            0,
+            "a drag reports the degrees of freedom that remain"
+        );
+        let after = edge_points(&sketch_edge(&sketch, 0));
+        assert!(
+            (before.0 .0 - after.0 .0).abs() < 1e-6
+                && (before.0 .1 - after.0 .1).abs() < 1e-6
+                && (before.1 .0 - after.1 .0).abs() < 1e-6
+                && (before.1 .1 - after.1 .1).abs() < 1e-6,
+            "the hard constraints win: {before:?} -> {after:?}"
+        );
+        assert_eq!(
+            attribute::<Vec<usize>>(&sketch, "RedundantConstraints"),
+            Vec::<usize>::new()
+        );
+
+        // A root axis is not a draggable point.
+        let error = sketch
+            .call_method1("drag", (-1, 1, ferrocad_vector(py, 1.0, 1.0, 0.0)))
+            .expect_err("the root cannot be dragged");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+
+        close_document(py, "RustSketchDragLocked");
+    });
+}
+
 #[test]
 fn autoconstraints_find_coincidence_and_verticality() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
@@ -555,7 +742,7 @@ fn root_axis_references_are_valid_and_external_ones_are_refused() {
 
         // `Coincident(root, start, geometry 0, start)`: the origin is the root
         // point, i.e. the start of the X axis.
-        let mut kwargs = PyDict::new(py);
+        let kwargs = PyDict::new(py);
         kwargs.set_item("Type", "Coincident").expect("Type");
         kwargs.set_item("First", -1).expect("First");
         kwargs.set_item("FirstPos", 1).expect("FirstPos");

@@ -1150,7 +1150,7 @@
     "files": 13,
     "functions": {
       "registered": 39,
-      "defined": 57,
+      "defined": 58,
       "names": [
         "Part.Precision::angular",
         "Part.Precision::confusion",
@@ -1205,6 +1205,7 @@
         "sketch_del_geometry",
         "sketch_detect_point_on_point",
         "sketch_detect_vertical_horizontal",
+        "sketch_drag",
         "sketch_geometry_count",
         "sketch_get_construction",
         "sketch_get_datum",

@@ -18,7 +18,7 @@
 
 use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector2, Vector3};
 use ferrocad_geom::Shape;
-use ferrocad_sketch_solver::{Constraint, Curve2d, GeoRef as SolverRef, Kind, Pos, Reference};
+use ferrocad_sketch_solver::{Constraint, Curve2d, GeoRef as SolverRef, Kind, Pos, Reference, SoftPrior};
 
 use crate::solids::{
     GeoRef as StoredRef, SketchConstraint, POINT_POS_END, POINT_POS_MID, POINT_POS_START,
@@ -202,6 +202,25 @@ pub(crate) fn constraint_of(
         second,
         third,
     })
+}
+
+/// The soft-drag prior for one positional geometry point.
+///
+/// `pos` is upstream's `PointPos` code: `1` start, `2` end, `3` mid, and `0` (or an
+/// unknown code) the curve itself, which the solver reads as its start point. The
+/// geometry is a positional index, the same one `addConstraint` accepts, because a
+/// drag is an editing gesture on the sketch's visible list.
+///
+/// A prior is a **penalty**, not an equation: it never enters the rank analysis, so
+/// a drag leaves the reported DOF and `RedundantConstraints` alone.
+pub(crate) fn drag_prior(geometry: usize, pos: i64, target: Vector2) -> SoftPrior {
+    SoftPrior::new(
+        SolverRef {
+            reference: Reference::Geometry(geometry),
+            pos: position(pos),
+        },
+        target,
+    )
 }
 
 /// Every stored record, as solver constraints.

@@ -2,10 +2,11 @@
 //!
 //! A snap is resolved against a [`SnapContext`] (a workplane plus its minor/major
 //! steps). The world `XY` plane is the default context, so the old `z = 0` behaviour is
-//! `SnapContext::world(step)`. Feature snaps (a topological vertex, an edge midpoint, a
-//! face centre or the workplane origin) are supplied by the caller as
-//! [`SnapCandidate`]s — the viewport reads them from the stage's display tessellation —
-//! and win over the picked point and the grid.
+//! `SnapContext::world(step)`; a context whose step is zero is the plane **without** a
+//! grid, which still resolves a point (the workplane is always a placement surface).
+//! Feature snaps (a topological vertex, an edge midpoint, a face centre or the workplane
+//! origin) are supplied by the caller as [`SnapCandidate`]s — the viewport reads them
+//! from the stage's display tessellation — and win over the picked point and the grid.
 
 use ferrocad_graphics::Camera;
 use ferrocad_types::Vector3;
@@ -32,6 +33,10 @@ pub enum SnapKind {
     Centre,
     /// The active workplane's origin.
     Origin,
+    /// The active workplane under the pointer, **unsnapped**: the placement a creation
+    /// tool gets when nothing else is under it. The plane is always a placement surface;
+    /// the grid step is an extra that only rounds the point.
+    Plane,
 }
 
 impl SnapKind {
@@ -208,8 +213,11 @@ pub fn nearest_feature(
 ///
 /// Over geometry, snaps to the picked world point ([`SnapKind::Point`]), reporting its
 /// local coordinates when a workplane is known. Otherwise, when a `context` is given,
-/// unprojects the pointer onto its plane and snaps to the nearest **major** or **minor**
-/// node ([`SnapKind::Grid`]). `None` when neither applies.
+/// unprojects the pointer onto its plane: the nearest **major** or **minor** node
+/// ([`SnapKind::Grid`]) when the context has a step, and the plane point itself
+/// ([`SnapKind::Plane`], unsnapped) when it does not — `minor` of zero means the plane
+/// without a grid. `None` only when the ray is parallel to the plane or points away
+/// from it.
 pub fn snap_to_geometry(
     event: &PointerEvent,
     camera: &Camera,
@@ -232,13 +240,19 @@ pub fn snap_to_geometry(
     }
 
     let context = context?;
-    if context.minor <= 0.0 {
-        return None;
-    }
     let ray = camera.ray_through(event.position)?;
     let origin = Vector3::new(ray.origin[0], ray.origin[1], ray.origin[2]);
     let direction = Vector3::new(ray.direction[0], ray.direction[1], ray.direction[2]);
     let local = context.workplane.ray_local(origin, direction)?;
+    if context.minor <= 0.0 {
+        let point = context.workplane.point(local[0], local[1]);
+        return Some(Snap {
+            point: [point.x as f32, point.y as f32, point.z as f32],
+            kind: SnapKind::Plane,
+            local: Some(local),
+            major: false,
+        });
+    }
     let (a, b, major) = snap_local(local, context.minor, context.major);
     let point = context.workplane.point(a, b);
     Some(Snap {
@@ -300,6 +314,24 @@ mod tests {
         }
     }
 
+    /// A perspective camera four units in front of the world `XY` plane, so an empty
+    /// pointer really intersects it (the identity camera's eye sits *in* the plane).
+    fn looking_at_the_plane() -> Camera {
+        Camera {
+            view: ferrocad_types::Placement::new(
+                ferrocad_types::Vector3::new(0.0, 0.0, -4.0),
+                ferrocad_types::Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: ferrocad_graphics::Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([200, 200], 1.0),
+        }
+    }
+
     #[test]
     fn a_hit_snaps_to_the_picked_point_and_reports_local_coordinates() {
         let context = SnapContext::world(0.5);
@@ -336,6 +368,38 @@ mod tests {
         let local = snap.local.expect("local coordinates");
         assert!((local[0] / 0.5).fract().abs() < 1e-6, "{local:?}");
         assert!((local[1] / 0.5).fract().abs() < 1e-6, "{local:?}");
+    }
+
+    #[test]
+    fn a_stepless_context_snaps_to_the_plane_point_itself() {
+        // A context with **no step** is the plane itself: the workplane is always a
+        // placement surface, and grid snapping is an extra that only rounds the point.
+        let point = SnapContext {
+            workplane: Workplane::world(),
+            minor: 0.0,
+            major: 0.0,
+        };
+        let snap = snap_to_geometry(
+            &event(PointerKind::Move, [130, 45], None),
+            &looking_at_the_plane(),
+            Some(&point),
+        )
+        .expect("the plane resolves a point");
+        assert_eq!(snap.kind, SnapKind::Plane);
+        assert_eq!(snap.point[2], 0.0, "the point is on the plane");
+        assert!(!snap.major, "no grid, no major node");
+        let local = snap.local.expect("local coordinates");
+
+        // The grid rounds the same pointer to a node; the plane keeps it as it is.
+        let grid = snap_to_geometry(
+            &event(PointerKind::Move, [130, 45], None),
+            &looking_at_the_plane(),
+            Some(&SnapContext::world(0.5)),
+        )
+        .expect("a grid node");
+        assert_eq!(grid.kind, SnapKind::Grid);
+        assert_ne!(snap.point, grid.point, "the plane point is not rounded");
+        assert_ne!(local, grid.local.expect("local coordinates"));
     }
 
     #[test]

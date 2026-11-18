@@ -294,6 +294,7 @@ fn snap_name(kind: SnapKind) -> &'static str {
         SnapKind::EdgeMid => "edge mid",
         SnapKind::Centre => "face centre",
         SnapKind::Origin => "origin",
+        SnapKind::Plane => "workplane",
     }
 }
 

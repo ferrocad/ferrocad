@@ -1925,8 +1925,9 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Set the grid snapping spacing (device-independent world units); `None` disables
-    /// grid snapping (geometry snapping still applies over a hit). Every hosted gizmo
-    /// uses the same step for its linear drags.
+    /// grid snapping (geometry snapping still applies over a hit, and a creation tool still
+    /// places on the workplane under the pointer — unsnapped). Every hosted gizmo uses the
+    /// same step for its linear drags.
     pub fn set_snap_grid(&mut self, grid: Option<f64>) {
         self.snap_grid = grid;
         for gizmo in self.gizmos.gizmos_mut() {
@@ -2481,7 +2482,12 @@ impl<V: InventorView> InventorViewport<V> {
         };
         let candidates = self.snap_candidates(hit);
         let context = self.snap_context();
-        let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates)?;
+        let snap = snap_to_geometry_with(&event, &self.camera, Some(&context), &candidates)?;
+        // The re-pivot aims at a point the user picked out — a feature, the grid, a
+        // surface — not at the bare plane under the pointer.
+        if snap.kind == SnapKind::Plane {
+            return None;
+        }
         Some((
             Vector3::new(
                 f64::from(snap.point[0]),
@@ -4279,8 +4285,14 @@ impl<V: InventorView> InventorViewport<V> {
         let before_status = self.tool.as_ref().map(|tool| tool.status());
         let context = self.snap_context();
         let candidates = self.snap_candidates(hit);
-        let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates);
-        self.set_snap_feedback(snap, context.map(|context| context.workplane));
+        let snap = snap_to_geometry_with(&event, &self.camera, Some(&context), &candidates);
+        // The aurora is a **snap** cue: a plane point is where the tool simply places, not
+        // something the pointer was pulled to, so it lights nothing and the status line
+        // stays quiet.
+        self.set_snap_feedback(
+            snap.filter(|snap| snap.kind != SnapKind::Plane),
+            Some(context.workplane.clone()),
+        );
         // A creation tool that has placed nothing yet follows the pointer with its
         // placement frame: the face's plane, the edge's direction, or the active
         // workplane. It is resolved from the **snapped** point, so the ghost sits where
@@ -6152,25 +6164,37 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// The snap plane: the active workplane when one is set, else the world grid.
-    fn snap_context(&self) -> Option<SnapContext> {
+    /// The snapping context: the active workplane and the steps to round a point to.
+    ///
+    /// The plane is **always** there — it is the surface a creation tool places on, so
+    /// the context is never absent. A zero step means "the plane, unsnapped": grid
+    /// snapping is an opt-in extra (`set_snap_grid`), not a precondition for placing.
+    fn snap_context(&self) -> SnapContext {
         if self.active_workplane.is_default() {
             // The default plane keeps the world grid's steps (and honours the snap-grid
-            // switch); a bound plane uses the step derived from its face.
-            return self.snap_grid.map(SnapContext::world);
+            // switch).
+            return match self.snap_grid {
+                Some(minor) => SnapContext::world(minor),
+                None => SnapContext {
+                    workplane: Workplane::world(),
+                    minor: 0.0,
+                    major: 0.0,
+                },
+            };
         }
         let (minor, major) = plane_steps(
             self.active_workplane.extent,
             ground_radius(&self.camera, self.grid_radius),
             self.grid_policy(),
         );
-        Some(SnapContext {
+        SnapContext {
             workplane: self.active_workplane.plane.clone(),
             // The plane's own step, not the world's: a snap must land on a line the plane
             // draws. The layer may cull a sub-pixel minor level for screen density, which
             // changes pixels, not spacing.
             minor,
             major,
-        })
+        }
     }
 
     /// Whether a hovered face's grid is still waiting out [`FACE_DWELL`]. The renderer
@@ -7677,6 +7701,7 @@ fn snap_name(kind: SnapKind) -> &'static str {
         SnapKind::EdgeMid => "edge mid",
         SnapKind::Centre => "face centre",
         SnapKind::Origin => "origin",
+        SnapKind::Plane => "workplane",
     }
 }
 
@@ -13278,7 +13303,7 @@ mod tests {
         );
 
         // The snap uses the plane's step, so it lands on a line the plane draws.
-        let context = view.snap_context().expect("the bound plane snaps");
+        let context = view.snap_context();
         assert_eq!((context.minor, context.major), patch_steps(extent));
 
         // Every vertex of the bound plane's **ground** lies inside that patch. The
@@ -14005,7 +14030,7 @@ mod tests {
                 element: "Face1".into()
             }
         );
-        let context = view.snap_context().expect("a snap plane");
+        let context = view.snap_context();
         assert_eq!(context.workplane.kind, active.plane.kind);
         // The bound plane snaps on the steps its own patch is drawn on, so the grid and
         // the snapping agree.
@@ -14056,9 +14081,10 @@ mod tests {
         // Esc clears it: snapping returns to the world and its ground comes back.
         assert!(view.handle_key(&escape_key()));
         assert!(view.active_workplane().is_default());
-        assert!(
-            view.snap_context().is_none(),
-            "no world grid snapping by default"
+        assert_eq!(
+            view.snap_context().minor,
+            0.0,
+            "the world plane snaps to no grid by default"
         );
         assert_eq!(local_packets(&view), 0, "the bound plane's layer is gone");
         assert!(
@@ -15226,12 +15252,11 @@ mod tests {
     fn a_tool_started_in_empty_space_never_binds_a_face() {
         let mut view = tool_view();
         let _ = view.take_tool_state();
-        // Snapping is what lets an empty-space click land on the plane at all; without
-        // it a click off geometry places nothing and the session has not really begun.
-        view.set_snap_grid(Some(0.25));
-
+        // The click off geometry still lands on the workplane (that is where a creation
+        // tool places when nothing is under it), so the session has begun.
         view.handle_pointer([10.0, 10.0]);
         click(&mut view, [10.0, 10.0]);
+        assert_eq!(view.tool_status().expect("an active tool").points, 1);
         assert!(
             view.active_workplane().is_default(),
             "the first click was empty, so the session stays on World XY"
@@ -15242,6 +15267,61 @@ mod tests {
         assert!(
             view.active_workplane().is_default(),
             "the first point settles the session's plane"
+        );
+    }
+
+    /// A creation tool places on the **active workplane** itself, not only on geometry.
+    ///
+    /// The plane is always a placement surface: grid snapping is an opt-in extra, so a
+    /// hover over bare plane still follows with the ghost and a click still lands a point
+    /// there. Without it a creation tool could only place on a body or within a few pixels
+    /// of the plane's origin, which is not what "create on the workplane" means.
+    #[test]
+    fn a_creation_tool_places_on_the_bare_workplane() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.refresh();
+
+        // No grid step and nothing to hit: the hover still resolves the plane point.
+        assert_eq!(view.snap_context().minor, 0.0, "the grid snapping is off");
+        assert!(view.handle_pointer([40.0, 45.0]), "the hover is dispatched");
+        assert_eq!(
+            view.snap_kind(),
+            None,
+            "a plane point is a placement, not a snap"
+        );
+        let marker = view
+            .tool()
+            .expect("the tool is armed")
+            .items()
+            .last()
+            .expect("the marker slot")
+            .positions()
+            .to_vec();
+        assert!(!marker.is_empty(), "the ghost follows the pointer");
+        // The marker is a small 3-D cross; its centre is the point on the plane.
+        let centre_z = marker.iter().map(|point| point[2]).sum::<f32>() / marker.len() as f32;
+        assert!(
+            centre_z.abs() < 1e-6,
+            "the ghost sits on the world XY plane: {marker:?}"
+        );
+
+        // And a click lands the point on that same plane.
+        click(&mut view, [40.0, 45.0]);
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "the click places a point"
         );
     }
 

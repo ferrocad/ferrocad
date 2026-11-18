@@ -29,6 +29,8 @@ pub enum SnapKind {
     Centre,
     /// The active workplane's origin.
     Origin,
+    /// The active workplane under the pointer, unsnapped.
+    Plane,
 }
 
 impl From<SnapKind> for fs::SnapKind {
@@ -40,6 +42,7 @@ impl From<SnapKind> for fs::SnapKind {
             SnapKind::EdgeMid => fs::SnapKind::EdgeMid,
             SnapKind::Centre => fs::SnapKind::Centre,
             SnapKind::Origin => fs::SnapKind::Origin,
+            SnapKind::Plane => fs::SnapKind::Plane,
         }
     }
 }
@@ -53,6 +56,7 @@ impl From<fs::SnapKind> for SnapKind {
             fs::SnapKind::EdgeMid => SnapKind::EdgeMid,
             fs::SnapKind::Centre => SnapKind::Centre,
             fs::SnapKind::Origin => SnapKind::Origin,
+            fs::SnapKind::Plane => SnapKind::Plane,
         }
     }
 }

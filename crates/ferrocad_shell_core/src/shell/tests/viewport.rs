@@ -3255,3 +3255,69 @@ fn a_drag_released_over_the_chrome_still_ends_the_gesture(cx: &mut TestAppContex
         "the click after the stranded drag still places a point"
     );
 }
+
+/// A creation pill places on the **active workplane**, not only on a body.
+///
+/// The pane is empty away from the slab: the ghost still follows the pointer there and a
+/// click still lands a point, because the workplane is the placement surface and grid
+/// snapping is only an extra that rounds it.
+#[gpui::test]
+fn a_creation_pill_places_on_the_bare_workplane(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(crate::Contributions::new().with_tool(
+                "test_polyline",
+                || Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>,
+            ));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    draw(&mut cx);
+
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let ghost = |cx: &VisualTestContext| -> Vec<[f32; 3]> {
+        viewport.read_with(cx, |viewport, _| {
+            viewport
+                .tool()
+                .expect("the pill is armed")
+                .items()
+                .last()
+                .expect("the marker slot")
+                .positions()
+                .to_vec()
+        })
+    };
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    // Well away from the slab, and below it: empty plane.
+    let off_the_body = canvas.center() + gpui::point(px(220.), px(200.));
+
+    cx.simulate_mouse_move(off_the_body, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let first = ghost(&cx);
+    assert!(!first.is_empty(), "the ghost follows the pointer over bare plane");
+    cx.simulate_mouse_move(
+        off_the_body + gpui::point(px(40.), px(30.)),
+        None::<MouseButton>,
+        gpui::Modifiers::default(),
+    );
+    draw(&mut cx);
+    assert_ne!(first, ghost(&cx), "the ghost follows the pointer");
+
+    cx.simulate_mouse_down(off_the_body, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(off_the_body, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(1),
+        "a click off the body places a point on the workplane"
+    );
+}

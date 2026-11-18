@@ -78,6 +78,8 @@ mdBook edition is assembled from these pages and the addon pages below.
 - [user/explanation/ui-rotate.md](user/explanation/ui-rotate.md) — the Rotate rings: the angle row, the one-ring lock and `Reset 0°`.
 - [user/explanation/ui-extrude.md](user/explanation/ui-extrude.md) — the Push/Pull stem: extrude and pocket, and the browser gap.
 - [user/explanation/ui-fillet.md](user/explanation/ui-fillet.md) — the Fillet edge scrubber, radius/chamfer and the browser gap.
+- [user/explanation/sketcher.md](user/explanation/sketcher.md) — the constrained 2-D profile: the constraint model, the pure-Rust solver, drawing and padding, and the vertex grips.
+- [user/explanation/sculpt.md](user/explanation/sculpt.md) — the Sculpt bundle: the cage/skin/body recipe, Catmull-Clark and sewn patches, the control-point grip and persistence.
 
 ## Mods documentation
 
@@ -185,6 +187,7 @@ here.
 - [developer/workbenches/qt-strategy.md](developer/workbenches/qt-strategy.md) — running upstream workbench GUIs without Qt: the measured surface and Q0–Q5.
 - [developer/workbenches/screenshot-tool.md](developer/workbenches/screenshot-tool.md) — the three `tools/screenshot.py` scopes, the `tools/ui_shots.py` highlighted UI figures, the `tools/ui_gifs.py` interaction animations (Xephyr and headless Chrome), the snapshot spec and the GPU-free image manifest gate.
 - [developer/workbenches/sculpt.md](developer/workbenches/sculpt.md) — the Sculpt bundle: the cage/skin document pair, the Catmull-Clark boundary rules, the patch construction and its measured convergence, the body roles and persistence.
+- [developer/workbenches/simplecad.md](developer/workbenches/simplecad.md) — the external canvas-first app as a proving ground: the 88-module baseline, the scripted workflow gate and how to run both.
 - [developer/workbenches/toy-workbench.md](developer/workbenches/toy-workbench.md) — the kernel-free reference edition and the template for a new workbench.
 
 ## Project documentation
@@ -301,7 +304,7 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
 - [project/tasks/opening-a-large-model.md](project/tasks/opening-a-large-model.md) — the open-and-sync budget for a 41 MB assembly: what is left after the mesh-hop changes (OCCT's ASCII BRep restore and `BRepMesh`), why a coarser first mesh only recovers a third, and the order to fix it. Stages 1–5.
 - [project/tasks/operation-failure-modelling.md](project/tasks/operation-failure-modelling.md) — typed, recoverable Part failures: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the `FilletRef`/`Recovery` affordances and the `SESSION_HOLD(failure)` payload. F1 landed; F2–F5 open.
-- [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
+- [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the closed SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack; the stable reference is [developer/workbenches/simplecad.md](developer/workbenches/simplecad.md).
 - [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.
 - [project/tasks/mod-events.md](project/tasks/mod-events.md) — the mod-facing event contract (stage E1): a fixed low-frequency event set the host advertises, explicit `FerroCAD.subscribe`, and why a mod-to-mod bus is deferred.
 - [project/research/transform-session-compatibility.md](project/research/transform-session-compatibility.md) — the read-only recon behind the transform plans: what the tree already supports, the five structural changes, and what the plan got wrong.

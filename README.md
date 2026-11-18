@@ -11,18 +11,20 @@ stays `FreeCAD`; the project/distribution is `ferrocad`.
 | Track | What it is | State |
 | --- | --- | --- |
 | **Engine** | the Rust document model behind the `FreeCAD` API | units/quantities, properties, documents, links, expressions, observers, undo, and both serializers. The App/Base surface is the measured MVP. |
-| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **253/408 (62.0%)** upstream API names. |
-| **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **50/0/0/1**, and `test_modification` is **31/0/2**. |
-| **App shell** | the `bite-gpui` window over one document backend | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools and the loadout. **One document implementation with four runtimes** (CPython, RustPython, JS, none); the browser shell runs the same `RustAppBackend` and `pivy.coin` scene core. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the tree. |
-| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **985 passed, 49 failed, 18 errored, 7 skipped**, no aborts. The 5 Qt groups are classified skips, and the scripted draw → push/pull → cut → STL workflow is a green acceptance test. |
+| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **254/408 (62.3%)** upstream API names. |
+| **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **93/0/0/1**, and `test_modification` is **33/0/0/0**. |
+| **Sketcher** | the constrained 2-D profile | `Sketcher::SketchObject` stores typed constraints against stable geometry ids; a pure-Rust Levenberg-Marquardt solver reports DOF, redundancy and conflicts; `Sketch_Polyline`/`Sketch_Dimension` drive the pad, and each sketch vertex is a declared plane grip. `part_sketcher` **18/18**, `test_sketch_constraints.py` **40/40**. |
+| **Sculpt** | the cage/skin/body bundle | `Sculpt_*` commands over a Catmull-Clark cage, sewn bicubic patches and a `PartDesign::Body`; the cage is a support and the skin is the base; a control-point grip edits the cage. **6** unit + **3** composition tests, **29** Python workflow cases, `--edition sculpt`. |
+| **App shell** | the `bite-gpui` window over one document backend | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools and the loadout. **One document implementation with four runtimes** (CPython, RustPython, JS, none); the browser shell runs the same `RustAppBackend` and `pivy.coin` scene core. SimpleCAD S4.1–S4.6 (view facade, ranked pick, selection object, workplane/face frames and push/pull stem) are in the tree. |
+| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **1039 passed, 6 failed, 2 errored, 7 skipped**, no aborts. The 5 Qt groups are classified skips, and the scripted draw → push/pull → cut → STL workflow is a green acceptance test. |
 | **Distribution** | how it ships | `v0.1.4`, the base and Parametric artifacts (AppImage + Windows zip), and `cargo install ferrocad`. macOS is not shipped yet. |
 
 This is a **working preview, not a finished product**. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against FreeCAD's
 public API can be served by a Rust implementation instead of the C++ one, without
-changing the script.* PartDesign's feature tree, Sketcher's solver, FEM, CAM and the GUI
-workbenches are deliberately out of scope; the measured subset is stated with every
-number.
+changing the script.* The measured subset now includes a from-scratch Sketcher solver and
+the Sculpt bundle; PartDesign's full feature tree, FEM, CAM and the GUI workbenches remain
+deliberate gaps. The measured subset is stated with every number.
 
 **Roadmap.** [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) is the three-horizon summary and
 [`docs/project/TODO-15-11-2026.md`](docs/project/TODO-15-11-2026.md) the active backlog. The measured
@@ -376,26 +378,40 @@ Implemented and measured:
   primitives, booleans, dress-ups, curves/surfaces, NURBS conversion, `ShapeFix`,
   `ChFi2d`, feature objects, `Part::FeaturePython` and topological lineage. The upstream
   Part suite reports **531 passed, 0 failed, 0 errored, 12 skipped**; the API audit
-  covers **253/408** names.
+  covers **254/408** names.
 * **Mesh** through `ferrocad_mesh` / `ferrocad_mesh_py`: triangle payloads, STL and
   `.bms`, analysis/editing, `Mesh::Feature`, `MeshPart.meshFromShape`, and the `.FCStd`
   `<Mesh>` member.
 * **The workbench platform**: Python feature proxies (`Part::FeaturePython`,
   `Part::Part2DObjectPython`) execute, change, attach, persist and restore; the Draft M2
-  modules are **27/27**, the Draft `--draft` group is **50/0/0/1**, and
-  `test_modification` is **31/0/2**.
+  modules are **27/27**, the Draft `--draft` group is **93/0/0/1**, and
+  `test_modification` is **33/0/0/0**.
+* **Sketcher**: `Sketcher::SketchObject` stores typed constraints against stable geometry
+  ids, `ferrocad_sketch_solver` is a pure-Rust Levenberg-Marquardt solve with island
+  splitting and a rank analysis, `SketchObject.drag` exposes the soft-prior seam, and the
+  edition's `Sketch_Polyline`/`Sketch_Dimension` drive a linked pad. The contract is
+  [`docs/developer/workbenches/sketch-constraints.md`](docs/developer/workbenches/sketch-constraints.md)
+  and the user page is [`docs/user/explanation/sketcher.md`](docs/user/explanation/sketcher.md).
+* **Sculpt**: the [`python/Sculpt`](python/Sculpt) bundle builds a Catmull-Clark cage, a
+  sewn patch solid and a `PartDesign::Body`; `crates/ferrocad_sculpt` adds the six
+  `Sculpt_*` commands and the cage-point grip. The stable note is
+  [`docs/developer/workbenches/sculpt.md`](docs/developer/workbenches/sculpt.md) and the
+  user page is [`docs/user/explanation/sculpt.md`](docs/user/explanation/sculpt.md).
 * **The shell and interaction**: the viewport, model tree, property editor, console,
   command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools, and the
-  SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object.
+  SimpleCAD S4.1–S4.6 view facade, ranked pick, selection object, workplane/face frames and
+  push/pull stem.
 
 Not implemented, or deliberately partial:
 
-* PartDesign's feature tree, a from-scratch Sketcher solver, FEM, CAM and the GUI
-  workbenches. `Part::Prism` and the `Sketcher::SketchObject` object type exist where
-  Draft needs them; the `Sketcher` module and solver do not. The P4 plan binds PlanGCS
-  rather than writing a solver.
-* The rest of the Part API: 156 distinct upstream names are still uncovered. The
+* PartDesign's full feature tree, FEM, CAM and the GUI workbenches. `Part::Prism` and the
+  `Sketcher::SketchObject` object type exist; the Sketcher solver is the measured one
+  described above, not upstream PlanGCS.
+* The rest of the Part API: 154 distinct upstream names are still uncovered. The
   SimpleCAD/Draft runs are the work list.
+* Sculpt is a cage/skin bundle, not a general surface modeler: no limit-surface (G1/G2)
+  patches, no cage edge/face handles and no vendored `Curves`/`SubD`. Its `.FCStd` path
+  needs `Sculpt.attach` because upstream stores a binary proxy there.
 * Full upstream `.FCStd` byte-for-byte compatibility and every module payload. The
   format is real and round-trips our documents; it is not a claim of upstream parity.
 * The Qt-based Draft GUI paths. The native `FreeCADGui` facade, the `PySide` shim and
@@ -413,21 +429,21 @@ The measured subset and its caveats are in
 **H1 (finish Part/OCCT) is closed** except the optional two composed-alias element-map
 counts and the two documented limits. **H2 (the workbench platform) is built**: one
 document with four runtimes, the browser shell and the backend-parity close-out; what
-remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
+remains is Draft M3–M5 breadth (the P4 round took `test_modification` to 33/0/0/0 and the
+Draft gate to 93/0/0/1).
 **H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.6 are the view facade,
 ranked pick, selection object, workplane/face frames and push/pull stem (integration
-baseline **1032 passed / 6 failed / 9 errored / 7 skipped**, 88/88 modules). Packaging is
+baseline **1039 passed / 6 failed / 2 errored / 7 skipped**, 88/88 modules). Packaging is
 on v0.1.4; macOS is the parked distribution leg.
 
-The most recent rounds are the **P2 boolean/seam round** — one build per general fuse,
-measured vertex images, cached edge orientation, upstream's `(other, tolerance, *,
-noElementMap)` boolean signature and its tessellation default, a document transaction
-that records a rename and a placement's baked shape, and a placement that is a
-`TopLoc_Location` over an un-moved base — which closed 43 SimpleCAD failures, and the
-**November platform round** that preceded it. The round logs are
-[`docs/project/record/2026-11-14-p2-boolean-seam.md`](docs/project/record/2026-11-14-p2-boolean-seam.md)
-and
-[`docs/project/record/2026-11-13-november-round.md`](docs/project/record/2026-11-13-november-round.md);
+The most recent rounds are the **P4 Sketcher round** — the constraint model with stable
+ids and construction, the pure-Rust solver, `SketchObject.drag`, the sketch/pad rail and
+the vertex grips — and the **Sculpt/P3 bundle round** (cage, skin, body, cage grip and the
+`--edition sculpt` payload), following the **P2 boolean/seam round** that closed 43
+SimpleCAD failures. The round logs are
+[`docs/project/record/2026-11-15-p4-sketch-model.md`](docs/project/record/2026-11-15-p4-sketch-model.md),
+[`docs/developer/workbenches/sculpt.md`](docs/developer/workbenches/sculpt.md) and
+[`docs/project/record/2026-11-14-p2-boolean-seam.md`](docs/project/record/2026-11-14-p2-boolean-seam.md);
 the previous workplane/grid round is
 [`docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
 

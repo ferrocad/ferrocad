@@ -267,10 +267,13 @@ its 3-D ghost preview.
 
 ### 3.1 Live placement frame (`TargetHost`)
 
-The workplane is **always** a placement surface, not only a snapping grid: the viewport
-resolves the pointer onto the active plane and reports it as `SnapKind::Plane` when
-nothing else claimed it (`snap_context` carries a zero step when grid snapping is off). A
-plane point is a placement, not a snap, so it draws the ghost but not the aurora.
+The workplane is **always** a placement surface, and the grid drawn on it is what the
+pointer snaps to: the steps come from the layer that draws the plane (`snap_context`
+follows the same `plane_steps` the grid layer uses), so a snap lands on a **line the
+user can see** and lights the aurora. Hiding the grid leaves nothing to snap to, so the
+point stays where the pointer is — and a placement with no step is reported as
+`SnapKind::Plane`, which draws the ghost but not the aurora: it is where the tool
+places, not something the pointer was pulled to.
 
 As the pointer moves while a spatial tool (`Box`, `Cylinder`, `Sketch`, `3D Text`, …) is
 `ARMED`, the viewport resolves the pick and the snap candidates into one of three
@@ -278,7 +281,7 @@ placement frames:
 
 | Hovered target | Placement `ManipulatorFrame` | Tool-strip badge | Stage cue |
 | --- | --- | --- | --- |
-| **Empty space / workplane** | `origin` = the workplane point under the pointer (rounded to a grid node only when a snap step is configured); `basis` = the active workplane `(u, v, n)` (`WP: XY` by default) | `· WP: XY` | Translucent ghost on the workplane; the snap aurora (`AURORA_COLOR`, `#38BDF8` @ 0.85) only when the point was actually snapped |
+| **Empty space / workplane** | `origin` = the workplane point under the pointer, snapped to a grid node when the grid is drawn; `basis` = the active workplane `(u, v, n)` (`WP: XY` by default) | `· WP: XY` | Snap aurora (`AURORA_COLOR`, `#38BDF8` @ 0.85) and the dashed rays for a grid node, with the translucent ghost on the workplane; with the grid hidden, the ghost alone |
 | **Planar face** (`Face6`) | `origin` = snapped point on the face (`Centre`, `Vertex`, or the ray hit); `basis` = face tangents `(u, v)` + outward normal `+N`, from the same tessellation normal solver as `PushPullStem` (`gizmo-manipulators.md` §9.1) | `· Face6 (+N)` | Hovered face gets `HIGHLIGHT_TINT` (12 % cyan); the ghost sits flush and extrudes along `+N` |
 | **Edge** (`Edge3`) | `origin` = `Vertex`, `EdgeMid`, or the nearest point on `ShapeItem::edge_polyline`; `basis` = the edge tangent `t` + a camera-aligned normal | `· Edge3` | Edge highlights in `HOVER_RIM`; the ghost aligns its datum axis or sweep path to the edge |
 

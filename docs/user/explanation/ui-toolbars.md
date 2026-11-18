@@ -32,6 +32,11 @@ occludes only itself, so a press on the canvas beside it still orbits or selects
 | **Select** | selector | the topology filter (`Select: Body`, …) | `Auto`, `Body`, `Face` and `Edge` |
 | **Snap** | capability | the global snap switch | the six snap modes |
 
+**The grid is also the snap grid.** A creation tool places on the active workplane, and
+with the grid shown the point snaps to the lines it draws: a cyan marker with dashed rays
+to the plane's axes shows which node was caught. Hide the grid and the point sits exactly
+under the pointer, on the plane, with nothing to snap to.
+
 The order is stable: Grid, Axes, WP, Gizmo, Select, Snap. The `Gizmo` control sits
 between `WP` and `Select` so the environment controls keep one visual order.
 

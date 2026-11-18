@@ -3321,3 +3321,73 @@ fn a_creation_pill_places_on_the_bare_workplane(cx: &mut TestAppContext) {
         "a click off the body places a point on the workplane"
     );
 }
+
+/// A **parameter** pill anchors its ghost on the bare workplane, not only on a body.
+///
+/// The box's preview is driven by its placement frame rather than a clicked point, so it
+/// is the case a workplane-only placement can silently miss: the pointer is parked in
+/// empty space, well off the boot document's body, where the only thing under it is the
+/// world `XY` plane.
+#[gpui::test]
+fn a_box_pill_anchors_on_the_bare_workplane(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(crate::Contributions::new().with_tool("box", || {
+                Box::new(ferrocad_stage::BoxTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("box", cx);
+        })
+    });
+    // Two frames: the first prepaint settles the element's size, and the camera's
+    // viewport with it, so the probe below maps screen to world on a stable frame.
+    draw(&mut cx);
+    draw(&mut cx);
+
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let corner = |cx: &VisualTestContext| -> Option<[f32; 3]> {
+        viewport.read_with(cx, |viewport, _| {
+            viewport
+                .tool()
+                .and_then(|tool| tool.items().first()?.positions().first().copied())
+        })
+    };
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    // Far off the body (and below it), where nothing is pickable: bare world plane.
+    let empty = canvas.center() + gpui::point(px(-500.), px(300.));
+
+    cx.simulate_mouse_move(empty, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        viewport.read_with(&cx, |viewport, _| viewport.snap_kind()),
+        None,
+        "nothing to snap to: the placement is the plane itself"
+    );
+    let preview = corner(&cx).expect("the ghost has a corner");
+    assert!(
+        preview[2].abs() < 1e-6,
+        "the preview sits on the world XY plane: {preview:?}"
+    );
+
+    cx.simulate_mouse_down(empty, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(empty, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(1),
+        "the click anchors the box on the workplane"
+    );
+    let anchor = corner(&cx).expect("the anchored box");
+    assert!(
+        (anchor[0] - preview[0]).abs() < 1e-3 && (anchor[1] - preview[1]).abs() < 1e-3,
+        "it anchored where the ghost was: {anchor:?} vs {preview:?}"
+    );
+}

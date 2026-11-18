@@ -15325,6 +15325,64 @@ mod tests {
         );
     }
 
+    /// A **parameter** tool (the box) anchors on the bare workplane too.
+    ///
+    /// Its preview is driven by the placement frame rather than a clicked point, so it is
+    /// the case a plane-only placement can silently miss.
+    #[test]
+    fn a_parameter_tool_anchors_on_the_bare_workplane() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_tool(Some(Box::new(ferrocad_stage::BoxTool::new())));
+        view.refresh();
+
+        view.handle_pointer([40.0, 45.0]);
+        let preview = view
+            .tool()
+            .expect("the tool is armed")
+            .items()
+            .first()
+            .expect("the box")
+            .positions()
+            .first()
+            .copied()
+            .expect("a corner");
+        assert!(
+            preview[2].abs() < 1e-6,
+            "the preview sits on the world XY plane: {preview:?}"
+        );
+
+        click(&mut view, [40.0, 45.0]);
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "the click anchors the box"
+        );
+        let anchored = view
+            .tool()
+            .expect("the tool is armed")
+            .items()
+            .first()
+            .expect("the box")
+            .positions()
+            .first()
+            .copied()
+            .expect("a corner");
+        assert!(
+            (anchored[0] - preview[0]).abs() < 1e-3 && (anchored[1] - preview[1]).abs() < 1e-3,
+            "it anchored where the ghost was: {anchored:?} vs {preview:?}"
+        );
+    }
+
     #[test]
     fn an_explicit_plane_survives_a_tool_session() {
         let mut view = slab_view();

@@ -275,6 +275,12 @@ point stays where the pointer is — and a placement with no step is reported as
 `SnapKind::Plane`, which draws the ghost but not the aurora: it is where the tool
 places, not something the pointer was pulled to.
 
+The same holds for the **face** a tool is about to bind: the face's grid blooms before
+the click, so the snap is resolved on that face's plane and grid rather than on the
+session plane (`placement_context`). On a face plane the grid is the placement, so a
+pick only chooses the plane — the point is a drawn node, or a feature snap when one is
+within `FEATURE_PIXELS`.
+
 As the pointer moves while a spatial tool (`Box`, `Cylinder`, `Sketch`, `3D Text`, …) is
 `ARMED`, the viewport resolves the pick and the snap candidates into one of three
 placement frames:
@@ -282,7 +288,7 @@ placement frames:
 | Hovered target | Placement `ManipulatorFrame` | Tool-strip badge | Stage cue |
 | --- | --- | --- | --- |
 | **Empty space / workplane** | `origin` = the workplane point under the pointer, snapped to a grid node when the grid is drawn; `basis` = the active workplane `(u, v, n)` (`WP: XY` by default) | `· WP: XY` | Snap aurora (`AURORA_COLOR`, `#38BDF8` @ 0.85) and the dashed rays for a grid node, with the translucent ghost on the workplane; with the grid hidden, the ghost alone |
-| **Planar face** (`Face6`) | `origin` = snapped point on the face (`Centre`, `Vertex`, or the ray hit); `basis` = face tangents `(u, v)` + outward normal `+N`, from the same tessellation normal solver as `PushPullStem` (`gizmo-manipulators.md` §9.1) | `· Face6 (+N)` | Hovered face gets `HIGHLIGHT_TINT` (12 % cyan); the ghost sits flush and extrudes along `+N` |
+| **Planar face** (`Face6`) | `origin` = a node of the face's **own grid** (a feature snap — `Vertex`, `EdgeMid`, `Centre` — wins within 10 px), `basis` = face tangents `(u, v)` + outward normal `+N`, from the same tessellation normal solver as `PushPullStem` (`gizmo-manipulators.md` §9.1) | `· Face6 (+N)` | Hovered face gets `HIGHLIGHT_TINT` (12 % cyan); the ghost sits flush and extrudes along `+N` |
 | **Edge** (`Edge3`) | `origin` = `Vertex`, `EdgeMid`, or the nearest point on `ShapeItem::edge_polyline`; `basis` = the edge tangent `t` + a camera-aligned normal | `· Edge3` | Edge highlights in `HOVER_RIM`; the ghost aligns its datum axis or sweep path to the edge |
 
 - **Additive vs subtractive (`⊕ Add ▾` / `⊖ Cut`).** When a solid primitive (`Box`,

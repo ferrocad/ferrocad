@@ -103,10 +103,11 @@ skipped rather than selected.
 - **A click lands on the workplane, on the grid you can see.** The dock's tools place on
   whatever is under the pointer: a body's face, an edge, or — with nothing there — the
   workplane you are working on (`WP: XY` by default, or the plane a first click bound to a
-  face). With the grid shown, the point snaps to its lines and a cyan marker with dashed
-  rays shows what it caught; hide the grid and the point sits exactly under the pointer.
-  The anchor marker follows the pointer across all of it, so creating is never limited to
-  hovering a body.
+  face). With the grid shown, the point snaps to the lines of the plane you are drawing
+  on — the workplane's, or the face's own grid — and a cyan marker with dashed rays shows
+  what it caught; a vertex, edge midpoint or face centre within about 10 px wins over the
+  grid. Hide the grid and the point sits exactly under the pointer. The anchor marker
+  follows the pointer across all of it, so creating is never limited to hovering a body.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

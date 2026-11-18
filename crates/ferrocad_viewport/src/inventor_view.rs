@@ -4273,19 +4273,29 @@ impl<V: InventorView> InventorViewport<V> {
         if self.tool.is_none() {
             return false;
         }
-        let event = PointerEvent {
+        let before_status = self.tool.as_ref().map(|tool| tool.status());
+        // The plane the tool is drawing on, and whether the pointer's own pick names the
+        // point. On a **face** plane the grid is the placement — that is what drawing on a
+        // face means — so a pick there names the plane, not the point: the snap unprojects
+        // onto the face's grid instead of landing on the raw surface point.
+        let (context, grid_wins) = self.placement_context(hit);
+        let projection = Some(ViewProjection::from_camera(&self.camera));
+        let pointer = |hit: Option<&Hit>| PointerEvent {
             kind,
             position: device,
             button,
             hit: hit.copied(),
             // A tool hit-tests its own geometry through this (screen space, so the
             // threshold is zoom-independent).
-            projection: Some(ViewProjection::from_camera(&self.camera)),
+            projection,
         };
-        let before_status = self.tool.as_ref().map(|tool| tool.status());
-        let context = self.snap_context();
         let candidates = self.snap_candidates(hit);
-        let snap = snap_to_geometry_with(&event, &self.camera, Some(&context), &candidates);
+        let snap = snap_to_geometry_with(
+            &pointer(if grid_wins { None } else { hit }),
+            &self.camera,
+            Some(&context),
+            &candidates,
+        );
         // The aurora is a **snap** cue: a plane point is where the tool simply places, not
         // something the pointer was pulled to, so it lights nothing and the status line
         // stays quiet.
@@ -4293,6 +4303,7 @@ impl<V: InventorView> InventorViewport<V> {
             snap.filter(|snap| snap.kind != SnapKind::Plane),
             Some(context.workplane.clone()),
         );
+        let event = pointer(hit);
         // A creation tool that has placed nothing yet follows the pointer with its
         // placement frame: the face's plane, the edge's direction, or the active
         // workplane. It is resolved from the **snapped** point, so the ghost sits where
@@ -6163,7 +6174,53 @@ impl<V: InventorView> InventorViewport<V> {
             .collect()
     }
 
-    /// The snap plane: the active workplane when one is set, else the world grid.
+    /// The plane a creation tool's pointer lands on, and whether its own pick names the
+    /// point.
+    ///
+    /// The first press of a creation tool **binds** the planar face under it (tier 1), and
+    /// that face's grid blooms before the click, so the snap must already be on the face's
+    /// grid — otherwise the ghost and the click land on the session plane under a grid that
+    /// says otherwise. A face plane is where the drawing happens, so its grid is the
+    /// placement and a pick only chooses the plane; the world plane is a reference, so a
+    /// pick over a body still names the point there (and the click binds that face).
+    fn placement_context(&self, hit: Option<&Hit>) -> (SnapContext, bool) {
+        if let Some(frame) = self.binding_frame(hit) {
+            return (self.face_snap_context(&frame), true);
+        }
+        let context = self.snap_context();
+        let face = matches!(
+            context.workplane.kind,
+            ferrocad_stage::WorkplaneKind::Face { .. }
+        );
+        let grid_wins = face && context.minor > 0.0;
+        (context, grid_wins)
+    }
+
+    /// The face a creation tool's first press would bind to the session plane.
+    fn binding_frame(&self, hit: Option<&Hit>) -> Option<FaceFrame> {
+        if !self.active_workplane.is_default() {
+            return None;
+        }
+        let tool = self.tool.as_ref()?;
+        if tool.status().points > 0 || tool.picks_workplane() {
+            return None;
+        }
+        self.face_frame_at(hit?)
+    }
+
+    /// A face's snapping context: the same steps and the same screen-density promotion as
+    /// the patch the layer draws on it (`local_grid`).
+    fn face_snap_context(&self, frame: &FaceFrame) -> SnapContext {
+        let policy = self.grid_policy();
+        let (minor, major) = plane_steps(Some(frame.radius), 0.0, policy);
+        let (minor, major) = drawn_steps(&self.camera, &frame.plane, minor, major, policy);
+        SnapContext {
+            workplane: frame.plane.clone(),
+            minor,
+            major,
+        }
+    }
+
     /// The snapping context: the active workplane and the steps to round a point to.
     ///
     /// Grid snapping is what makes a click land on a **drawn** line, so the steps follow
@@ -13169,6 +13226,75 @@ mod tests {
         assert!(
             max_alpha(&view.grid_queue.packets[0]) < world_alpha * 0.5,
             "the world grid recedes under a local plane"
+        );
+    }
+
+    /// The face a creation tool is about to bind is its **snap** plane.
+    ///
+    /// The first press binds the planar face under it and the face's grid blooms before
+    /// the click, so the point must already snap to that grid: otherwise the ghost and the
+    /// point follow the world grid under a grid the press is about to bind over.
+    #[test]
+    fn the_face_under_the_pointer_is_the_snap_plane() {
+        use ferrocad_stage::{SnapKind, WorkplaneKind};
+
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+        // Inside Face1, away from its vertices, edge midpoints and centre (a feature snap
+        // within 10 device pixels wins over the grid, as it should).
+        view.handle_pointer([32.0, 37.0]);
+
+        let device = view.camera.viewport.to_device([32.0, 37.0]);
+        let hit = view.pick(device);
+        let (context, grid_wins) = view.placement_context(hit.as_ref());
+        assert!(grid_wins, "the face's grid is the placement");
+        assert!(
+            matches!(context.workplane.kind, WorkplaneKind::Face { .. }),
+            "the snap plane is the face, not the world: {:?}",
+            context.workplane.kind
+        );
+        assert_eq!(
+            view.snap_kind(),
+            Some(SnapKind::Grid),
+            "the pick names the plane, the grid names the point"
+        );
+
+        // The point is a node of the face's grid, on the face.
+        let feedback = view.snap_feedback.as_ref().expect("a snap");
+        let point = feedback.snap.point;
+        assert!(
+            (f64::from(point[2]) - 0.5).abs() < 1e-6,
+            "on the face plane: {point:?}"
+        );
+        let local = context.workplane.project(Vector3::new(
+            f64::from(point[0]),
+            f64::from(point[1]),
+            f64::from(point[2]),
+        ));
+        for coordinate in local {
+            let nodes = coordinate / context.minor;
+            assert!(
+                (nodes - nodes.round()).abs() < 1e-6,
+                "a node of the face grid {local:?} (step {})",
+                context.minor
+            );
+        }
+
+        // The session is bound to that face by the click, and a later hover on another
+        // face of the body still snaps on the bound plane's grid.
+        click(&mut view, [32.0, 37.0]);
+        assert!(!view.active_workplane().is_default(), "the click bound the face");
+        view.handle_pointer([68.0, 37.0]);
+        assert_eq!(view.snap_kind(), Some(SnapKind::Grid));
+        let point = view
+            .snap_feedback
+            .as_ref()
+            .expect("a snap")
+            .snap
+            .point;
+        assert!(
+            (f64::from(point[2]) - 0.5).abs() < 1e-6,
+            "the bound plane, not the neighbouring face: {point:?}"
         );
     }
 

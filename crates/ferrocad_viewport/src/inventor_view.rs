@@ -13159,6 +13159,24 @@ mod tests {
             .count()
     }
 
+    /// The geometry a bound (or previewed) plane contributes to the grid, in draw order.
+    ///
+    /// The workplane origin node is the axis cross's, not the grid's: it is depth-biased
+    /// as soon as a *local* plane is active, so filtering on the bias alone would compare
+    /// the preview's lattice against the bound lattice **plus** a marker.
+    fn local_geometry(view: &InventorViewport<FakeView>) -> Vec<(Topology, Vec<Vertex>)> {
+        view.grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.mesh_id != view.grid.origin.mesh)
+            .filter(|packet| packet.state.depth_bias > 0.0)
+            .filter_map(|packet| {
+                let geometry = packet.geometry.as_ref()?;
+                Some((packet.topology, geometry.vertices.clone()))
+            })
+            .collect()
+    }
+
     fn escape_key() -> KeyDownEvent {
         KeyDownEvent {
             keystroke: gpui::Keystroke {
@@ -14107,6 +14125,29 @@ mod tests {
             view.grid_queue.len(),
             bound,
             "a bound plane never previews another face"
+        );
+    }
+
+    /// The face grid a tool **previews** is the grid it gets once the face is bound.
+    ///
+    /// `local_grid` promises "the same steps and the same patch as the plane once it is
+    /// active, so binding it does not jump the grid": both come from one place, so a click
+    /// may not move a line of the lattice the pointer was showing.
+    #[test]
+    fn binding_a_face_does_not_change_its_grid() {
+        let mut view = tool_view();
+        assert!(view.handle_pointer([32.0, 37.0]));
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        let preview = local_geometry(&view);
+        assert!(!preview.is_empty(), "the face previews its grid");
+
+        assert!(view.activate_hovered_workplane(), "the click binds the face");
+        view.sync_grid();
+        assert_eq!(
+            local_geometry(&view),
+            preview,
+            "the bound plane draws exactly the grid the preview showed"
         );
     }
 

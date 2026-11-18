@@ -56,13 +56,13 @@ DEFAULT_SCREEN = (1800, 1200)
 
 #: One entry per figure.
 #:
-#: The two sources load the same Python workbenches: the Desktop from
-#: `CAPTURE_MODS`, the Web from the fetched `www/mods/index.json` packs. Both keep
-#: the user's provider choices (the Coin grid and axis included), so the tabs draw
-#: the same grid. Both sources also receive the same whole settings file: the
-#: Desktop reads it as its parameter store and every Web section passes it as
-#: `settings_file=<url>`, so the grid, axis and gizmo values cannot drift between
-#: the tabs.
+#: The two sources load the same workbenches: the Web from the fetched
+#: `www/mods/index.json` pack, the Desktop from `CAPTURE_MODS`, which derives from
+#: that same index. Both keep the user's provider choices (the Coin grid and axis
+#: included), so the tabs draw the same grid. Both sources also receive the same
+#: whole settings file: the Desktop reads it as its parameter store and every Web
+#: section passes it as `settings_file=<url>`, so the grid, axis and gizmo values
+#: cannot drift between the tabs.
 #:
 #: * `source` is `web` or `xephyr`.
 #: * `query` is the page harness URL (web only).
@@ -166,8 +166,8 @@ SECTIONS = {
         "label": "Move (Web)",
         "query": "?manipulator=transform:apply:Fillet::1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1&select=745,410&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (543, 360, 180, 178),
-        "crop": (530, 354, 214, 194),
+        "box": (519, 360, 180, 178),
+        "crop": (506, 354, 214, 194),
     },
     "move-desktop": {
         "source": "xephyr",
@@ -183,7 +183,7 @@ SECTIONS = {
     "rotate-web": {
         "source": "web",
         "label": "Rotate (Web)",
-        "query": "?select=600,400&keys=ctrl-shift-r",
+        "query": "?select=745,410&keys=ctrl-shift-r",
         "window": (1600, 1000),
         "box": (10, 884, 572, 38),
         "crop": (8, 880, 576, 46),
@@ -206,10 +206,11 @@ SECTIONS = {
     "extrude-web": {
         "source": "web",
         "label": "Extrude (Web)",
-        "query": "?select=600,400&keys=2;wait:500;press:740,450;move:740,450;wait:500&runtime=pywasm,js",
+        "query": "?select=745,410&keys=2;wait:500;press:740,450;move:740,450;wait:500&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (728, 540, 235, 130),
-        "crop": (718, 528, 255, 154),
+        "box": (610, 412, 150, 100),
+        "crop": (598, 400, 168, 122),
+        "label_side": "right",
     },
     "extrude-desktop": {
         "source": "xephyr",
@@ -228,10 +229,10 @@ SECTIONS = {
     "fillet-web": {
         "source": "web",
         "label": "Fillet (Web)",
-        "query": "?select=600,400&keys=3;wait:500;press:760,260;move:760,260;wait:500&runtime=pywasm,js",
+        "query": "?select=745,410&keys=3;wait:500;press:760,260;move:760,260;wait:500&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (670, 185, 125, 60),
-        "crop": (658, 176, 149, 78),
+        "box": (723, 236, 118, 55),
+        "crop": (712, 228, 140, 71),
     },
     "fillet-desktop": {
         "source": "xephyr",
@@ -301,18 +302,23 @@ def _app_binary(path: Path) -> Path:
 #: another file.
 DESKTOP_SETTINGS = Path.home() / ".config" / "ferrocad" / "parameters.json"
 
-#: The Python workbenches the page's `www/mods/index.json` carries. The desktop is
-#: given the same explicit list, so the two tabs load the same providers and cards
-#: (the JS/wasm packages are not Python packs and are not part of this set).
-CAPTURE_MODS = (
-    "mods/AxisOverlay",
-    "mods/AxisOverlayCoin",
-    "mods/GizmoOverlay",
-    "mods/GizmoOverlayShader",
-    "mods/GridOverlay",
-    "mods/GridOverlayCoin",
-)
 
+def _capture_mods() -> tuple[str, ...]:
+    """The workbenches the page's `www/mods/index.json` carries, in its order.
+
+    The desktop is given the same explicit list, so the two tabs load the same
+    providers and cards. It includes the JS modules: the desktop composes its
+    QuickJS page, so `--addons mods/AxisOverlayJs` loads the same axis backend the
+    browser loads. A selection the other half lacks would make one tab fall back
+    silently.
+    """
+    index = json.loads((WEB_DIR / "mods" / "index.json").read_text(encoding="utf-8"))
+    names = [entry["name"] for entry in index.get("mods", [])]
+    names += [entry["name"] for entry in index.get("js", [])]
+    return tuple(f"mods/{name}" for name in names)
+
+
+CAPTURE_MODS = _capture_mods()
 
 
 def _seed_settings() -> dict:
@@ -371,12 +377,12 @@ def desktop_capture_config(
 ) -> tuple[tempfile.TemporaryDirectory, list[str], dict[str, str]]:
     """A throwaway desktop configuration shared by the still and GIF tools.
 
-    The app is launched with [`CAPTURE_MODS`], the same six Python workbenches the
-    page's pack index carries, so the two tabs have the same settings cards and
-    provider registry. The settings file is copied into the workspace and becomes
-    the app's parameter file; its provider choices and appearance values are the
-    user's own, and the copy means the app's shutdown write cannot modify the
-    source.
+    The app is launched with [`CAPTURE_MODS`], the same workbenches the page's
+    pack index carries (the Python packs and the JS modules), so the two tabs have
+    the same settings cards and provider registry. The settings file is copied into
+    the workspace and becomes the app's parameter file; its provider choices and
+    appearance values are the user's own, and the copy means the app's shutdown
+    write cannot modify the source.
     """
     workspace = tempfile.TemporaryDirectory(prefix="ferrocad-capture-")
     parameters = Path(workspace.name) / "parameters.json"

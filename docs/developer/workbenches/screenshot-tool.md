@@ -189,10 +189,14 @@ captures each figure from the source that can show it:
   headless Chrome (no display) and from the Parametric app in Xephyr. Both hosts draw the
   triad, rings and Part manipulators; the browser's query harness selects the body or
   face/edge and arms the slot, then presses where the handle is drawn.
-- Both sources apply the same whole settings file, **including the stored Coin
-  `grid`/`axis` providers**. The browser draws those overlays as WGSL through wgpu's
-  WebGL2 backend; the grid shader guards its edge-on centre ray so a degenerate frame
-  cannot discard it (see the [browser README](../../../crates/ferrocad_web_gpui/README.md)).
+- Both sources apply the same whole settings file, **including the stored
+  `grid`/`axis` provider choices**. The desktop boot is given the same workbench set
+  the page's `www/mods/index.json` lists — the Python packs and the JS modules — so a
+  `js` provider selected in the settings has a backend on both hosts instead of
+  falling back silently on the desktop. The browser draws those overlays as WGSL
+  through wgpu's WebGL2 backend; the grid shader guards its edge-on centre ray so a
+  degenerate frame cannot discard it (see the
+  [browser README](../../../crates/ferrocad_web_gpui/README.md)).
 - **Chrome, toolbar, action bar and tool loadout** are captured from both hosts. The
   chrome figure opens the application menu; the wheel figure needs a pointer press, so
   both hosts use their input harnesses.

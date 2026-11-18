@@ -121,7 +121,8 @@ GIFS = {
             {"press": (830, 515), "duration": 0.3},
             {"drag": [(845, 524), (860, 533), (875, 542)]},
             {"caption": "Release leaves it pending", "release": (875, 542), "wait": 0.7, "duration": 1.0},
-            {"caption": "Click ✓ to accept", "click": (836, 557), "wait": 0.8, "duration": 1.4},
+            {"move": (822, 557), "wait": 0.3, "duration": 0.4},
+            {"caption": "Click ✓ to accept", "click": (822, 557), "wait": 0.8, "duration": 1.4},
         ],
     },
     "move-web": {
@@ -135,7 +136,8 @@ GIFS = {
             {"press": (640, 452), "duration": 0.3},
             {"drag": [(655, 460), (670, 468), (685, 476), (690, 482)]},
             {"caption": "Release leaves it pending", "release": (690, 482), "wait": 0.7, "duration": 1.0},
-            {"caption": "Click ✓ to accept", "click": (627, 481), "wait": 0.8, "duration": 1.4},
+            {"move": (628, 482), "wait": 0.3, "duration": 0.4},
+            {"caption": "Click ✓ to accept", "click": (628, 482), "wait": 0.8, "duration": 1.4},
         ],
     },
     "pushpull": {

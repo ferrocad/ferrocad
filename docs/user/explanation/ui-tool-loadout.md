@@ -100,6 +100,11 @@ skipped rather than selected.
   turns and nothing is placed. Letting go anywhere ends the drag — over the chrome or
   outside the window too, not only over the canvas. The middle button navigates anywhere,
   including mid-session.
+- **A click lands on the active workplane.** The dock's tools place on whatever is under
+  the pointer: a body's face, an edge, or — with nothing there — the workplane you are
+  working on (`WP: XY` by default, or the plane a first click bound to a face). The anchor
+  marker follows the pointer across all of it, so creating is never limited to hovering a
+  body; a grid step, when one is configured, only rounds the point.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

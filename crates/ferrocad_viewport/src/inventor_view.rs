@@ -6166,32 +6166,38 @@ impl<V: InventorView> InventorViewport<V> {
     /// The snap plane: the active workplane when one is set, else the world grid.
     /// The snapping context: the active workplane and the steps to round a point to.
     ///
-    /// The plane is **always** there — it is the surface a creation tool places on, so
-    /// the context is never absent. A zero step means "the plane, unsnapped": grid
-    /// snapping is an opt-in extra (`set_snap_grid`), not a precondition for placing.
+    /// Grid snapping is what makes a click land on a **drawn** line, so the steps follow
+    /// the grid the plane's layer draws: the default plane follows the ground grid, a
+    /// bound plane the patch it draws. A zero step means "the plane, unsnapped" — the
+    /// grid is hidden, or no step is configured — and the plane is still a placement
+    /// surface, so a creation tool keeps working with nothing to snap to.
     fn snap_context(&self) -> SnapContext {
-        if self.active_workplane.is_default() {
-            // The default plane keeps the world grid's steps (and honours the snap-grid
-            // switch).
-            return match self.snap_grid {
-                Some(minor) => SnapContext::world(minor),
-                None => SnapContext {
-                    workplane: Workplane::world(),
-                    minor: 0.0,
-                    major: 0.0,
-                },
-            };
-        }
-        let (minor, major) = plane_steps(
-            self.active_workplane.extent,
-            ground_radius(&self.camera, self.grid_radius),
-            self.grid_policy(),
-        );
+        let policy = self.grid_policy();
+        let radius = ground_radius(&self.camera, self.grid_radius);
+        let workplane = self.active_workplane.plane.clone();
+        // The same screen-density promotion the layer itself applies, so a snap lands on a
+        // line the grid really drew rather than on a level the camera culled.
+        let drawn = |minor: f64, major: f64| {
+            drawn_steps(&self.camera, &workplane, minor, major, policy)
+        };
+        let (minor, major) = if self.active_workplane.is_default() {
+            match self.snap_grid {
+                // An explicit step is the pitch the caller asked for: never re-spaced.
+                Some(minor) => (minor, minor * 10.0),
+                // Snapping follows the grid you can see; with it hidden there is nothing to
+                // snap to, so the plane point stays unsnapped.
+                None if !self.grid_enabled => (0.0, 0.0),
+                None => {
+                    let (minor, major) = plane_steps(None, radius, policy);
+                    drawn(minor, major)
+                }
+            }
+        } else {
+            let (minor, major) = plane_steps(self.active_workplane.extent, radius, policy);
+            drawn(minor, major)
+        };
         SnapContext {
-            workplane: self.active_workplane.plane.clone(),
-            // The plane's own step, not the world's: a snap must land on a line the plane
-            // draws. The layer may cull a sub-pixel minor level for screen density, which
-            // changes pixels, not spacing.
+            workplane,
             minor,
             major,
         }
@@ -13302,9 +13308,21 @@ mod tests {
                 < 1e-9
         );
 
-        // The snap uses the plane's step, so it lands on a line the plane draws.
+        // The snap uses the plane's step, so it lands on a line the plane draws — or the
+        // coarser level the layer promoted it to when the patch is sub-pixel on screen.
+        let (patch_minor, patch_major) = patch_steps(extent);
         let context = view.snap_context();
-        assert_eq!((context.minor, context.major), patch_steps(extent));
+        assert!(
+            context.minor >= patch_minor,
+            "never finer than the patch: {} vs {patch_minor}",
+            context.minor
+        );
+        let ratio = context.minor / patch_minor;
+        assert!(
+            (ratio - ratio.round()).abs() < 1e-9,
+            "a promoted level of the patch step, not a re-spacing: {ratio}"
+        );
+        assert_eq!(context.major, patch_major);
 
         // Every vertex of the bound plane's **ground** lies inside that patch. The
         // triad is not part of it: its stems are screen-sized and longer than a small
@@ -14032,11 +14050,21 @@ mod tests {
         );
         let context = view.snap_context();
         assert_eq!(context.workplane.kind, active.plane.kind);
-        // The bound plane snaps on the steps its own patch is drawn on, so the grid and
-        // the snapping agree.
-        let (minor, major) = patch_steps(active.extent.expect("a face has an extent"));
-        assert_eq!(context.minor, minor);
-        assert_eq!(context.major, major);
+        // The bound plane snaps on the steps its own patch is drawn on — including the
+        // coarser level the layer promotes it to when the patch is sub-pixel on screen — so
+        // the grid and the snapping agree.
+        let (patch_minor, patch_major) = patch_steps(active.extent.expect("a face has an extent"));
+        assert!(
+            context.minor >= patch_minor,
+            "never finer than the patch: {} vs {patch_minor}",
+            context.minor
+        );
+        let ratio = context.minor / patch_minor;
+        assert!(
+            (ratio - ratio.round()).abs() < 1e-9,
+            "a promoted level of the patch step: {ratio}"
+        );
+        assert_eq!(context.major, patch_major);
 
         // The active plane is drawn without a dwell, and hovering it adds no second
         // layer. (The packet count is an implementation detail — a hidden minor level
@@ -14082,9 +14110,9 @@ mod tests {
         assert!(view.handle_key(&escape_key()));
         assert!(view.active_workplane().is_default());
         assert_eq!(
-            view.snap_context().minor,
-            0.0,
-            "the world plane snaps to no grid by default"
+            view.snap_context().workplane,
+            Workplane::world(),
+            "the world plane is the snap plane again"
         );
         assert_eq!(local_packets(&view), 0, "the bound plane's layer is gone");
         assert!(
@@ -15322,6 +15350,101 @@ mod tests {
             view.tool_status().expect("an active tool").points,
             1,
             "the click places a point"
+        );
+    }
+
+    /// With the grid drawn, the plane snaps to the lines it shows — and the aurora is the
+    /// cyan point that says so.
+    ///
+    /// The step is the layer's own (adaptive: it follows the camera), so a snap lands on a
+    /// line the user can see. A plane point is *not* a snap, so it gets no aurora; a grid
+    /// node does.
+    #[test]
+    fn the_visible_grid_is_the_snap_grid() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_grid(true);
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.refresh();
+
+        let context = view.snap_context();
+        assert!(context.minor > 0.0, "the ground grid has a step");
+        assert!(
+            context.major >= context.minor,
+            "the major lines are never finer than the minor ones"
+        );
+
+        // Away from the plane's origin (a feature snap in its own right).
+        view.handle_pointer([40.0, 45.0]);
+        let kind = view.snap_kind().expect("a grid snap");
+        assert_eq!(kind, SnapKind::Grid, "the hover snapped to the grid");
+        assert!(
+            !view.feedback_queue.is_empty(),
+            "the snap draws its cyan marker"
+        );
+        let positions = view
+            .tool()
+            .expect("armed")
+            .items()
+            .last()
+            .expect("marker")
+            .positions()
+            .to_vec();
+        // The marker is a small cross; its centre is the snapped point.
+        let count = positions.len() as f32;
+        let centre = [0, 1, 2].map(|axis| {
+            positions.iter().map(|point| point[axis]).sum::<f32>() / count
+        });
+        let local = view.active_workplane().plane.project(Vector3::new(
+            f64::from(centre[0]),
+            f64::from(centre[1]),
+            f64::from(centre[2]),
+        ));
+        for coordinate in local {
+            let nodes = coordinate / context.minor;
+            assert!(
+                (nodes - nodes.round()).abs() < 1e-6,
+                "the point sits on a drawn line: {local:?} (step {})",
+                context.minor
+            );
+        }
+    }
+
+    /// Hiding the grid leaves nothing to snap to, and placement still works.
+    #[test]
+    fn a_hidden_grid_leaves_the_plane_unsnapped() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_grid(false);
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.refresh();
+
+        assert_eq!(view.snap_context().minor, 0.0, "no grid to snap to");
+        view.handle_pointer([40.0, 45.0]);
+        assert_eq!(view.snap_kind(), None, "the plane point is not a snap");
+        click(&mut view, [40.0, 45.0]);
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "the click still places on the plane"
         );
     }
 

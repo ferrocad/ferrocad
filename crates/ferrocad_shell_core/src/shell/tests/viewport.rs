@@ -3322,14 +3322,16 @@ fn a_creation_pill_places_on_the_bare_workplane(cx: &mut TestAppContext) {
     );
 }
 
-/// A **parameter** pill anchors its ghost on the bare workplane, not only on a body.
+/// A **parameter** pill snaps to the visible grid and anchors there, not only on a body.
 ///
 /// The box's preview is driven by its placement frame rather than a clicked point, so it
-/// is the case a workplane-only placement can silently miss: the pointer is parked in
-/// empty space, well off the boot document's body, where the only thing under it is the
-/// world `XY` plane.
+/// is the case a workplane placement can silently miss: the pointer is parked in empty
+/// space, well off the boot document's body, where the only thing under it is the world
+/// `XY` plane. The grid is shown, as the `Grid` control does, so the placement snaps to a
+/// line and draws the cyan marker — the same switch that hides the grid leaves the point
+/// unsnapped (pinned by the viewport's `a_hidden_grid_leaves_the_plane_unsnapped`).
 #[gpui::test]
-fn a_box_pill_anchors_on_the_bare_workplane(cx: &mut TestAppContext) {
+fn a_box_pill_snaps_to_the_visible_grid(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
@@ -3353,6 +3355,15 @@ fn a_box_pill_anchors_on_the_bare_workplane(cx: &mut TestAppContext) {
     draw(&mut cx);
 
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    // Show the grid, as the toolbar's `Grid` control does: it is also the snap grid.
+    cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_grid(true) {
+                cx.notify();
+            }
+        });
+    });
+    draw(&mut cx);
     let corner = |cx: &VisualTestContext| -> Option<[f32; 3]> {
         viewport.read_with(cx, |viewport, _| {
             viewport
@@ -3368,8 +3379,8 @@ fn a_box_pill_anchors_on_the_bare_workplane(cx: &mut TestAppContext) {
     draw(&mut cx);
     assert_eq!(
         viewport.read_with(&cx, |viewport, _| viewport.snap_kind()),
-        None,
-        "nothing to snap to: the placement is the plane itself"
+        Some(ferrocad_stage::SnapKind::Grid),
+        "the point snapped to a line of the grid it can see"
     );
     let preview = corner(&cx).expect("the ghost has a corner");
     assert!(
@@ -3387,7 +3398,9 @@ fn a_box_pill_anchors_on_the_bare_workplane(cx: &mut TestAppContext) {
     );
     let anchor = corner(&cx).expect("the anchored box");
     assert!(
-        (anchor[0] - preview[0]).abs() < 1e-3 && (anchor[1] - preview[1]).abs() < 1e-3,
+        (anchor[0] - preview[0]).abs() < 1e-3
+            && (anchor[1] - preview[1]).abs() < 1e-3
+            && (anchor[2] - preview[2]).abs() < 1e-3,
         "it anchored where the ghost was: {anchor:?} vs {preview:?}"
     );
 }

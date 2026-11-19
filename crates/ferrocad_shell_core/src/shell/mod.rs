@@ -43,7 +43,7 @@ use ferrocad_widgets::scroll::scroll_area;
 use ferrocad_widgets::scrub;
 use ferrocad_widgets::slider;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
-use ferrocad_widgets::window_chrome::window_frame_with_leading;
+use ferrocad_widgets::window_chrome::window_frame_with_title_controls;
 use ferrocad_widgets::{ChangeEvent, RejectedChar, SubmitEvent, TextAreaState, TextInput};
 
 use crate::app;
@@ -68,6 +68,8 @@ pub mod hud;
 pub mod panels;
 // B17a: the About card's preferences controls (live providers, next-boot mods).
 pub(crate) mod prefs;
+// The transient status toast that replaced the bottom status strip.
+pub(crate) mod toast;
 
 // Keep the flat `shell::<name>` paths as aliases of the grouped modules, so both
 // `shell::move_hud` and `shell::hud::move_hud` work.
@@ -150,6 +152,21 @@ const SETTINGS_ROOT: &str = "Settings";
 /// Long enough to read as "that is the tool that just ran", short enough that it is
 /// plainly not a pending decision — the design's `PILL_HOLD` is not `SESSION_HOLD`.
 pub(crate) const PILL_HOLD: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// Whether `now` is a *new* history entry relative to `seen`.
+///
+/// An undo moves the depth down; a redo or a new transaction moves it up. A transaction
+/// that replaces the top after an undo keeps the depth but changes the name, so the top
+/// label is the tie-breaker. View changes move neither.
+fn advanced_history(seen: &(usize, String), now: &(usize, String)) -> bool {
+    now.0 > seen.0
+        || (now.0 == seen.0 && !now.1.is_empty() && now.1 != seen.1)
+}
+
+/// The most status cards the bottom-right feed shows at once. A new message displaces
+/// the oldest information first; a solver alert keeps its place until it is dismissed or a
+/// success clears it.
+pub(crate) const MAX_STATUS_TOASTS: usize = 3;
 
 /// How long a pass-through note (`clicked through: creation_pill`) stays on the line.
 pub(crate) const PASS_THROUGH_WINDOW: std::time::Duration =
@@ -364,6 +381,18 @@ pub struct ShellModel {
     pub gizmo_armed: bool,
     pub console: Vec<String>,
     pub status: String,
+    /// What `status` means for the toast's ink and persistence.
+    pub status_kind: toast::StatusKind,
+    /// Bumped by every [`ShellModel::note_status`] call. The toast uses it to tell a
+    /// repeated message ("moved 1 object" twice) from no update at all.
+    pub status_revision: u64,
+    /// The newest undo-stack entry, for the Undo tooltip and the toast's inline Undo.
+    pub undo_label: String,
+    /// The number of entries on the undo stack. A toast compares this before and after
+    /// its action to decide whether the action is undoable at all.
+    pub undo_depth: usize,
+    /// The newest redo-stack entry, for the Redo tooltip.
+    pub redo_label: String,
     /// What the host composed for this run (the About card's inventory). Empty when the
     /// host installed none — a test, `--check-init`, a headless run.
     pub composition: Composition,
@@ -379,6 +408,16 @@ impl ShellModel {
     /// The commands grouped by the surface that owns their control (P0.6, T0).
     pub fn surfaces(&self) -> commands::SurfaceGroups<'_> {
         commands::group_by_surface(&self.commands)
+    }
+
+    /// Record a status line and classify it for the transient toast.
+    ///
+    /// Every status writer goes through here so a repeated message still starts a fresh
+    /// toast (the revision changes even when the text does not).
+    pub(crate) fn note_status(&mut self, text: impl Into<String>) {
+        self.status = text.into();
+        self.status_kind = toast::classify(&self.status);
+        self.status_revision = self.status_revision.wrapping_add(1);
     }
 }
 
@@ -423,6 +462,20 @@ pub struct Shell {
     /// The overlay a click just passed through (`"creation_pill"`), with when it happened.
     /// Reported on the status line for a moment; no document concept is involved.
     pass_through: Option<(&'static str, web_time::Instant)>,
+    /// The transient status cards, oldest first, in the bottom-right feed. Each has its
+    /// own life; a new status appends (or refreshes an identical newest one) instead of
+    /// replacing the stack, and the oldest information gives way at the cap.
+    status_toasts: Vec<toast::Toast>,
+    /// The status revision the newest toast was built from.
+    toast_revision: u64,
+    /// The document history left by the previous toast's action. A new status is
+    /// undoable only when the stack advanced past this.
+    toast_undo_seen: (usize, String),
+    /// The toast whose history check has not resolved yet: a status can land a frame
+    /// before the document refresh that records its transaction.
+    toast_pending: Option<u64>,
+    /// The document the stack describes. Replacing the document clears the stack.
+    toast_document: String,
     /// The open command dialog (A3); one at a time.
     dialog: Option<OpenDialog>,
     /// Focus for the modal, so Esc cancels and Enter in a field accepts.
@@ -868,7 +921,11 @@ impl Shell {
             Err(e) => console.push(format!("workbench loader: {e}")),
         }
         let objects: usize = tree.iter().map(|d| d.objects.len()).sum();
-        let status = format!("{objects} object(s) · {}", boot.document);
+        let status = format!(
+            "{objects} object{} · {}",
+            if objects == 1 { "" } else { "s" },
+            boot.document
+        );
         // A fresh document starts with an empty selection snapshot: the process may
         // have booted before (tests), and stale names must not leak into `IsActive`.
         let _ = backend.set_selection(&[]);
@@ -890,6 +947,19 @@ impl Shell {
         }
         let _ = backend.set_view_state(&view);
         let commands = backend.commands().unwrap_or_default();
+        // The document's history is read once at boot; `refresh` keeps it current after
+        // every edit.
+        let (undo_label, undo_depth, redo_label) = tree
+            .iter()
+            .find(|document| document.active)
+            .map(|document| {
+                (
+                    document.undo_names.first().cloned().unwrap_or_default(),
+                    document.undo_names.len(),
+                    document.redo_names.first().cloned().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
         Ok(Arc::new(Mutex::new(ShellModel {
             title: format!("FerroCAD — {}", boot.document),
             version: boot.version,
@@ -904,6 +974,11 @@ impl Shell {
             tool: None,
             gizmo_armed: false,
             console,
+            status_kind: toast::classify(&status),
+            status_revision: u64::from(!status.is_empty()),
+            undo_label,
+            undo_depth,
+            redo_label,
             status,
             composition: Composition::default(),
             prefs: crate::types::PrefsReport::default(),
@@ -933,9 +1008,145 @@ impl Shell {
     /// A host doing work the shell did not start — the browser fetching mods after the
     /// first frame (B19) — says so here rather than waiting for the next command.
     pub fn set_status(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
-        self.model.lock().unwrap().status = text.into();
+        self.model.lock().unwrap().note_status(text);
         cx.notify();
     }
+
+    /// Reconcile the transient status toast stack with the model's latest status.
+    ///
+    /// Called from the render that follows a status change: the model bump is the
+    /// trigger, so no status writer has to know about the HUD. A new status appends a
+    /// toast (or refreshes the newest one when it repeats), leaving the older messages
+    /// visible. A confirmation schedules its own fade; a warning or error stays until it
+    /// is dismissed, undone, or replaced by the next status.
+    fn sync_toast(&mut self, cx: &mut Context<Self>) {
+        let (revision, text, kind, document, depth, label) = {
+            let model = self.model.lock().unwrap();
+            (
+                model.status_revision,
+                model.status.clone(),
+                model.status_kind,
+                model.document.clone(),
+                model.undo_depth,
+                model.undo_label.clone(),
+            )
+        };
+        let history = (depth, label);
+
+        // A document replacement starts a new history: the old stack is not ours.
+        let document_changed = document != self.toast_document;
+        if document_changed {
+            self.toast_document = document;
+            self.status_toasts.clear();
+            self.toast_undo_seen = history.clone();
+            self.toast_pending = None;
+        }
+
+        if revision == self.toast_revision {
+            // A status can land a frame before the refresh that records its
+            // transaction. Keep the pending check alive across renders; the refresh may
+            // arrive after the toast has already painted. A newer status replaces the
+            // pending id, so a stale check cannot claim another action.
+            if let Some(id) = self.toast_pending
+                && history != self.toast_undo_seen
+            {
+                if advanced_history(&self.toast_undo_seen, &history)
+                    && let Some(toast) = self
+                        .status_toasts
+                        .iter_mut()
+                        .find(|toast| toast.id == id)
+                {
+                    toast.mark_history(history.0, history.1.clone());
+                }
+                self.toast_undo_seen = history;
+                self.toast_pending = None;
+            }
+            return;
+        }
+        self.toast_revision = revision;
+        if text.trim().is_empty() {
+            return;
+        }
+
+        let now = web_time::Instant::now();
+        // A successful action is the "next valid modelling action" that dismisses an
+        // older solver alert; an error or a warning arriving later does not clear one.
+        if kind == toast::StatusKind::Success {
+            self.status_toasts.retain(|toast| !toast.kind.sticky());
+        }
+        // A repeated action ("Moved Box" twice) refreshes the newest pill instead of
+        // stacking a duplicate. The new id retires the old timer at the same time.
+        let index = if let Some(newest) = self
+            .status_toasts
+            .last_mut()
+            .filter(|toast| toast.text == text && toast.kind == kind)
+        {
+            newest.id = revision;
+            newest.shown_at = now;
+            self.status_toasts.len() - 1
+        } else {
+            self.status_toasts
+                .push(toast::Toast::new(revision, text, kind, now));
+            toast::trim_to_cap(&mut self.status_toasts, MAX_STATUS_TOASTS);
+            self.status_toasts.len() - 1
+        };
+
+        // Undo belongs to the action that moved the history, not to every status. The
+        // status usually lands after its refresh, so the comparison is immediate; when
+        // it does not, the next render resolves it.
+        if !document_changed && history != self.toast_undo_seen {
+            if advanced_history(&self.toast_undo_seen, &history) {
+                self.status_toasts[index].mark_history(history.0, history.1.clone());
+            }
+            self.toast_undo_seen = history;
+            self.toast_pending = None;
+        } else {
+            self.toast_pending = Some(revision);
+        }
+
+        // Notify at each motion step; each pill computes its own opacity and slide from
+        // `shown_at`, so this task only has to keep the frames coming. A warning or an
+        // error animates in but never fades or clears itself.
+        let sticky = kind.sticky();
+        let id = revision;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |shell, cx| {
+            for _ in 0..=toast::TOAST_ENTER_STEPS {
+                let _ = shell.update(cx, |_shell, cx| cx.notify());
+                executor
+                    .timer(toast::TOAST_ENTER / toast::TOAST_ENTER_STEPS)
+                    .await;
+            }
+            if sticky {
+                return;
+            }
+            executor
+                .timer(toast::TOAST_LIFE - toast::TOAST_ENTER)
+                .await;
+            for _ in 0..=toast::TOAST_FADE_STEPS {
+                let _ = shell.update(cx, |_shell, cx| cx.notify());
+                executor
+                    .timer(toast::TOAST_FADE / toast::TOAST_FADE_STEPS)
+                    .await;
+            }
+            let _ = shell.update(cx, |shell, cx| {
+                if let Some(index) = shell.status_toasts.iter().position(|toast| toast.id == id) {
+                    shell.status_toasts.remove(index);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Drop one toast (its ✕ or its inline Undo).
+    pub(crate) fn dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(index) = self.status_toasts.iter().position(|toast| toast.id == id) {
+            self.status_toasts.remove(index);
+            cx.notify();
+        }
+    }
+
 
     /// Fold one fetched pack's report into the window (B19).
     ///
@@ -989,6 +1200,16 @@ impl Shell {
     pub fn from_model(model: Arc<Mutex<ShellModel>>, cx: &mut Context<Self>) -> Self {
         let transcript = transcript_of(&model);
         let shortcuts = global_shortcuts(&model.lock().unwrap().commands);
+        // The boot status is not an action: do not toast it. Its history is the
+        // baseline the first real action is compared against.
+        let (toast_revision, toast_undo_seen, toast_document) = {
+            let model = model.lock().unwrap();
+            (
+                model.status_revision,
+                (model.undo_depth, model.undo_label.clone()),
+                model.document.clone(),
+            )
+        };
         let console = cx.new(|cx| {
             let mut area = TextAreaState::new(cx);
             area.set_transcript(transcript, cx);
@@ -1028,6 +1249,11 @@ impl Shell {
             tool_field: None,
             pill_hold: None,
             pass_through: None,
+            status_toasts: Vec::new(),
+            toast_revision,
+            toast_undo_seen,
+            toast_pending: None,
+            toast_document,
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
@@ -1376,7 +1602,7 @@ impl Shell {
                     return true;
                 }
                 _ => {
-                    // `0`–`3` are the loadout hotkeys (handled just below), so
+                    // `1`–`4` are the loadout hotkeys (handled just below), so
                     // only the other numeric keys start a number here. `-` and `.`
                     // are never slot keys and always open the remembered field.
                     let slot_digit = Slot::from_key(&event.keystroke.key).is_some();
@@ -1410,7 +1636,7 @@ impl Shell {
                 }
             }
         }
-        // The loadout slots: `0`–`3` equip Idle / Move / Push-Pull / Fillet. They sit
+        // The loadout slots: `1`–`4` equip Move / Push-Pull / Fillet / Inspect. They sit
         // above the gizmo escalation below, so `2` on an armed triad equips the face
         // hand instead of seeding the Move HUD with 2. A focused Δ field consumes its
         // own digits first; the Move HUD's resting fields do not count as a modal.
@@ -1433,7 +1659,7 @@ impl Shell {
         }
         // The Add hand's slots: `5`–`9` arm the pill at that position (`5` Sketch,
         // `6` Solid, `7` Surface, `8` Text, `9` Mesh — in strip order). They continue the
-        // Modify hand's `0`–`3` rather than restarting beside them, so one digit space
+        // Modify hand's `1`–`4` rather than restarting beside them, so one digit space
         // addresses both hands: a press selects the pill and arms the tool it names, and a
         // press on the pill that already holds the armed tool **steps to the next tool in
         // that category** — the loadout's own idea of a slot with several tools behind it,
@@ -1616,7 +1842,7 @@ impl Shell {
             self.rearm_selection(cx);
         }
         self.console_line(status.clone(), cx);
-        self.model.lock().unwrap().status = status;
+        self.model.lock().unwrap().note_status(status);
         cx.notify();
         ok
     }
@@ -1723,10 +1949,12 @@ impl Shell {
             self.preview_generation = crate::stage_view::preview_generation();
         }
         // G5: overlays registered through `FerroCADGui.addOverlay` before the viewport
-        // existed are pulled in now, once the scene they merge beside is built.
+        // existed are pulled in now, once the scene they merge beside is built. The
+        // provider role travels with each scene: the grid one is replayed on the
+        // hovered face's candidate plane.
         if crate::stage_view::overlays_dirty() {
-            let overlays = crate::stage_view::overlay_scenes();
-            viewport.set_overlays(overlays);
+            let overlays = crate::stage_view::overlay_scenes_tagged();
+            viewport.set_overlays_tagged(overlays);
         }
         // The view state is the source of truth: a grid toggled before the viewport
         // existed is applied now, with its steps.
@@ -1857,11 +2085,11 @@ impl Shell {
                     if !r.output.is_empty() {
                         m.console.push(r.output);
                     }
-                    m.status = if r.ok {
+                    m.note_status(if r.ok {
                         "ok".to_string()
                     } else {
                         "console error".to_string()
-                    };
+                    });
                 }
                 Err(e) => m.console.push(format!("error: {e}")),
             }
@@ -1981,8 +2209,10 @@ fn gpu_notice_banner(note: String, cx: &mut Context<Shell>) -> AnyElement {
                 .hover(|style| style.bg(rgb(ACCENT)))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(details.clone()));
-                    this.model.lock().unwrap().status =
-                        "viewport diagnostics copied to the clipboard".to_string();
+                    this.model
+                        .lock()
+                        .unwrap()
+                        .note_status("viewport diagnostics copied to the clipboard");
                     cx.notify();
                 }))
                 .child("Copy details"),
@@ -1993,6 +2223,9 @@ fn gpu_notice_banner(note: String, cx: &mut Context<Shell>) -> AnyElement {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let timing = timing::start();
+        // A status change anywhere in the shell bumps the model's revision; this is the
+        // one place that turns it into the transient pill (and schedules its fade).
+        self.sync_toast(cx);
         // A script's transient previews (S4.6) change without a document edit; the
         // generation check is a mutex read, and only a real change rebuilds the stage.
         self.sync_previews(cx);
@@ -2005,6 +2238,9 @@ impl Render for Shell {
         // miss schedules the probe for after this paint.
         self.sync_manipulator_probe(cx);
         let model = self.snapshot();
+        // The hover report is a transient HUD now that the status strip is gone; read it
+        // before the canvas so the overlay can paint it.
+        let hover = self.hover_line(cx);
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);
         // Everything above take the model's lock and sync state; everything below is
@@ -2190,12 +2426,10 @@ impl Render for Shell {
                     })
                     .when(begun.is_some(), |el| {
                         el.child(match begun {
-                            Some(tool) => crate::chrome::tool_pill(
-                                tool,
-                                self.tool_field_edit(),
-                                cx,
-                            )
-                            .into_any_element(),
+                            Some(tool) => {
+                                crate::chrome::tool_pill(tool, self.tool_field_edit(), cx)
+                                    .into_any_element()
+                            }
                             None => div().into_any_element(),
                         })
                     })
@@ -2238,13 +2472,32 @@ impl Render for Shell {
                         row
                     })
             })
-            // The globals (and Search) are a column on the canvas' left edge: the bottom
-            // belongs to the two hands and the tool's completion row.
-            .child(crate::chrome::globals_dock(
-                &model,
-                self.move_is_pending(cx) || self.pending_interaction.is_some(),
-                cx,
-            ))
+            // One overlay owns the bottom-right corner of the **viewport**, sixteen pixels
+            // in from the right edge and clear of the bottom-left tool dock: the hover
+            // report on top and the toast feed under it, the newest card nearest the
+            // corner. Sharing a column is what keeps the two from covering each other now
+            // that the cards no longer reserve a fixed width.
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(crate::chrome::TOAST_CORNER_BOTTOM))
+                    .right(px(16.))
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap_2()
+                    .when(!hover.trim().is_empty(), |corner| {
+                        corner.child(crate::chrome::hover_hint(&hover))
+                    })
+                    .when(!self.status_toasts.is_empty(), |corner| {
+                        corner.child(crate::chrome::status_toast_stack(
+                            &self.status_toasts,
+                            model.undo_depth,
+                            &model.undo_label,
+                            cx,
+                        ))
+                    }),
+            )
             // The creation flyout is a canvas overlay like the wheel: the pills it hangs
             // from live in the bottom-left row now, and the panel is placed by the press.
             .child(if self.popover_open("create") {
@@ -2277,49 +2530,15 @@ impl Render for Shell {
             workspace
         };
 
-        let hover = self.hover_line(cx);
-        let status = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .h(px(22.))
-            .px_3()
-            .bg(rgb(PANEL_ALT))
-            .text_xs()
-            .text_color(rgb(MUTED))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .child(model.status.clone())
-                    .when(!hover.is_empty(), |el| {
-                        el.child(div().text_color(rgb(0x38bdf8)).child(hover.clone()))
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(format!("FreeCAD {} · {}", model.version, model.backend))
-                    .child(crate::chrome::dev_tools_button(dev_tools_open, cx)),
-            );
-
-        // The reset: the main window is the frame, the viewport and the status line.
-        // The actions, inspector, property editor and console live in Dev Tools, and a
-        // modal still opens here, over the canvas the user is looking at.
+        // The reset: the main window is the frame and the full-bleed viewport. Action
+        // feedback is the transient toast over the canvas, not a permanent strip.
         let content = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(FG))
-            .child(workspace)
-            .child(status);
+            .child(workspace);
 
         let body = div()
             .id("shell-root")
@@ -2392,14 +2611,17 @@ impl Render for Shell {
         // the in-context finish pair floats beside the gizmo while a move is pending.
         // A modal or the object wheel hides both rather than stacking; they come back
         // when that transient layer closes. A manipulator's finish pair is the same
-        // control beside its dimension pill; the two hands cannot both be pending, so at
-        // most one pair is drawn.
+        // control beside its dimension pill, and an armed tool's is the same pill beside
+        // the shape it is drawing; the three cannot be live at once, so at most one pair
+        // is drawn.
         let body = if self.modal_open() || self.wheel.read(cx).is_open() {
             body
         } else if self.move_hud.is_some() {
             body.child(move_finish_overlay(self, window, cx))
         } else if self.pending_interaction.is_some() {
             body.child(manipulator_finish_overlay(self, window, cx))
+        } else if active_tool.is_some_and(crate::chrome::tool_has_begun) {
+            body.child(tool_finish_overlay(self, window, cx))
         } else {
             body
         };
@@ -2419,10 +2641,28 @@ impl Render for Shell {
         };
         // The app menu lives in the window title bar, not the viewport header: it is
         // app-level chrome, and the title bar is the one place a native-looking app
-        // menu belongs. The Dev Tools window passes no leading element.
+        // menu belongs. The document actions (Undo/Redo/Save) sit beside the title,
+        // because they act on the document it names. The Dev Tools window passes
+        // neither group.
         let leading = crate::chrome::app_menu(self.popover_open("app"), &model, dev_tools_open, cx)
             .into_any_element();
-        let frame = window_frame_with_leading(window, model.title.clone(), Some(leading), body);
+        let document = crate::chrome::document_controls(
+            &model,
+            self.move_is_pending(cx) || self.pending_interaction.is_some(),
+            cx,
+        )
+        .into_any_element();
+        // Search is window-wide rather than document-specific, so it is centred between
+        // the document group and the window buttons.
+        let search = crate::chrome::search_pill(cx).into_any_element();
+        let frame = window_frame_with_title_controls(
+            window,
+            model.title.clone(),
+            Some(leading),
+            Some(document),
+            Some(search),
+            body,
+        );
         timing::finish(timing, timing_prep);
         frame
     }

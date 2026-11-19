@@ -11,6 +11,7 @@ use crate::scene::shape::GHOST_SURFACE_ALPHA;
 use crate::shape::{DrawMode, ShapeItem};
 use crate::snap::Snap;
 use crate::workplane::Workplane;
+use ferrocad_graphics::theme;
 
 /// A tool's live status, for the host's tool strip.
 ///
@@ -248,6 +249,19 @@ pub trait Tool {
     /// placement frame — so a tool that does not care costs nothing.
     fn hover(&mut self, _target: Option<&crate::interaction::HoverTarget>) {}
 
+    /// The world anchor this session works at, when it has one.
+    ///
+    /// A creation tool that previews geometry knows where its fixed end is — the corner a
+    /// box grows from, the centre a circle grows around, the last point of a polyline. The
+    /// host projects it to put the session's `✗`/`✓` pair **beside the work**, so the
+    /// control never sits under the pointer where the next click lands (the same contract
+    /// [`Manipulator::anchor`](crate::interaction::Manipulator::anchor) has for its
+    /// handle). `None` (the default) is a tool with nothing to anchor to; the host then
+    /// places the pair at the canvas instead.
+    fn anchor(&self) -> Option<ferrocad_types::Vector3> {
+        None
+    }
+
     /// Write one of the strip's fields back into the tool.
     ///
     /// `text` is what the user typed (the raw field text, not a parsed number): a
@@ -290,8 +304,13 @@ pub const DRAG_THRESHOLD_PIXELS: f64 = 5.0;
 
 /// The default colour of the committed polyline (and of a plotted point).
 pub(crate) const COMMITTED_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// The default colour of the in-progress band, marker and plane preview.
-pub(crate) const CURSOR_COLOR: [f32; 4] = [1.0, 0.2, 1.0, 1.0];
+/// The default colour of the in-progress band, marker and preview: the theme's
+/// [`PREVIEW_INK`](ferrocad_theme::draw::PREVIEW_INK).
+///
+/// This used to be a raw magenta literal. It is a token now, and the same one the
+/// modify ghosts draw their perimeter in, so every "not geometry yet" ink is one
+/// themable colour rather than one per tool family.
+pub(crate) const CURSOR_COLOR: [f32; 4] = theme::PREVIEW_INK;
 
 /// The half-width, in millimetres, of the anchor cue a creation tool shows on hover.
 ///
@@ -599,6 +618,12 @@ impl Tool for PolylineTool {
         )
     }
 
+    fn anchor(&self) -> Option<ferrocad_types::Vector3> {
+        // The frontier: the vertex the next click would extend from, so the finish pair
+        // sits at the end of the stroke being drawn.
+        self.points.last().copied().map(crate::frame::vector)
+    }
+
     fn on_key(&mut self, key: &str, ctrl: bool) -> bool {
         match key {
             "backspace" | "delete" => self.remove_point(),
@@ -714,6 +739,10 @@ impl Tool for TaggedPolyline {
         self.inner.status()
     }
 
+    fn anchor(&self) -> Option<ferrocad_types::Vector3> {
+        self.inner.anchor()
+    }
+
     fn cancel(&mut self) -> bool {
         self.inner.cancel()
     }
@@ -738,16 +767,25 @@ pub(crate) fn wire_item(color: [f32; 4]) -> ShapeItem {
         .with_selectable(false)
 }
 
-/// A non-selectable **ghost surface** item: a translucent fill with its outline.
+/// A non-selectable **ghost surface** item: dielectric glass, with the tool's ink on the
+/// perimeter.
 ///
-/// This is the creation tools' preview look (C4): the fill is
-/// [`GHOST_SURFACE_ALPHA`](crate::scene::shape::GHOST_SURFACE_ALPHA) of the tool's ink and
-/// the pass blends rather than writing depth, so the ghost reads over the body it is
-/// about to imprint instead of hiding it.
+/// The fill is the surface glass at [`GHOST_SURFACE_ALPHA`], **not** the cursor colour.
+/// A 35 % wash of a saturated accent sits in the same luminance band as a lit facet, so
+/// it turns the body pink and compresses the step of the grid drawn on it; the glass
+/// tokens darken the facet instead and leave the lattice its contrast. The cursor colour
+/// stays on the outline — the cue that this is a preview rather than geometry — which is
+/// the `3-D ghost preview` row of
+/// [`creation-loadout.md`](../../docs/developer/interaction/creation-loadout.md).
 pub(crate) fn ghost_item(color: [f32; 4]) -> ShapeItem {
+    let wash = |ink: [f32; 4]| [ink[0], ink[1], ink[2], GHOST_SURFACE_ALPHA];
     ShapeItem::new(0)
         .with_draw_mode(DrawMode::ShadedWithEdges)
-        .with_surface_color([color[0], color[1], color[2], GHOST_SURFACE_ALPHA])
+        // Two-tone like the body it previews: an upward facet gets the glass top, the
+        // rest the shade. The alpha is the surface's; the shade's is only the two-tone
+        // flag.
+        .with_surface_color(wash(theme::GLASS_TOP))
+        .with_shade_color(wash(theme::GLASS_SHADE))
         .with_edge_color(color)
         .with_blended_surface()
         .with_selectable(false)
@@ -818,6 +856,7 @@ fn set_marker(item: &mut ShapeItem, at: Option<[f32; 3]>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::shape::BLENDED_DEPTH;
     use crate::snap::SnapKind;
     use ferrocad_graphics::{Hit, PickId, RenderQueue, Topology};
 
@@ -891,6 +930,52 @@ mod tests {
             item.emit(&mut queue);
         }
         queue
+    }
+
+    /// A ghost's fill is dielectric glass, and the tool's ink stays on its perimeter.
+    ///
+    /// A 35 % wash of the cursor colour shares a lit facet's luminance band, so it turns
+    /// the body pink and compresses the step of the grid drawn on it — which is why the
+    /// fill is the body's own glass tokens and the accent is the outline.
+    #[test]
+    fn a_ghost_is_glass_with_the_cursor_ink_on_its_perimeter() {
+        // An arbitrary ink: `ghost_item` must put whatever the tool passes on the
+        // perimeter, so the test cannot pass by matching the default.
+        let edge_ink = [0.2, 0.9, 0.4, 1.0];
+        let mut ghost = ghost_item(edge_ink);
+        set_ghost_loop(
+            &mut ghost,
+            &[
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+        );
+
+        let glass_top = |ink: [f32; 4]| [ink[0], ink[1], ink[2], GHOST_SURFACE_ALPHA];
+        assert_eq!(ghost.surface_color(), glass_top(theme::GLASS_TOP));
+        assert_eq!(
+            ghost.edge_color(),
+            edge_ink,
+            "the cue that this is a preview stays on the perimeter"
+        );
+
+        let mut queue = RenderQueue::default();
+        ghost.emit(&mut queue);
+        let fill = queue
+            .packets
+            .iter()
+            .find(|packet| packet.topology == Topology::Triangles)
+            .expect("the ghost has a fill");
+        assert_eq!(fill.state.color, glass_top(theme::GLASS_TOP));
+        assert_eq!(
+            fill.state.shade,
+            glass_top(theme::GLASS_SHADE),
+            "the two-tone material, like the body it previews"
+        );
+        assert_eq!(fill.state.depth, BLENDED_DEPTH);
     }
 
     fn line_packets(queue: &RenderQueue) -> usize {

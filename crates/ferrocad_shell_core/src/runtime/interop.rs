@@ -149,10 +149,6 @@ pub struct GpuiInteropPresenter {
     /// release descriptors.
     #[cfg(target_os = "linux")]
     ring: Option<WgpuSharedBufferRing>,
-    /// Whether [`Presenter::draw`] submitted a frame in this paint. `present` uses
-    /// the ring's `present` in that case and `last` for a paused repaint.
-    #[cfg(target_os = "linux")]
-    drew: bool,
     /// The same-device path's single surface. No ring is needed: gpui samples it on
     /// the same device and queue the producer submits to.
     #[cfg(not(target_os = "linux"))]
@@ -186,8 +182,6 @@ impl GpuiInteropPresenter {
             renderer: None,
             #[cfg(target_os = "linux")]
             ring: None,
-            #[cfg(target_os = "linux")]
-            drew: false,
             #[cfg(not(target_os = "linux"))]
             surface: None,
             #[cfg(not(target_os = "linux"))]
@@ -214,7 +208,6 @@ impl GpuiInteropPresenter {
 
         #[cfg(target_os = "linux")]
         {
-            self.drew = false;
             let Some(ring) = self.ring.as_mut() else {
                 self.status = PresenterStatus::Unsupported;
                 return;
@@ -253,17 +246,14 @@ impl GpuiInteropPresenter {
 
     /// The handle to paint this paint (Linux dma-buf path).
     ///
-    /// A paint after [`Presenter::draw`] asks the ring for the newest fence-free
-    /// frame (repeating the last good one when nothing is ready); a paused repaint
-    /// uses the last good frame without advancing the ring.
+    /// `present` hands over the newest frame whose GPU work has completed, and falls back
+    /// to the last good one when there is none. A paint that drew nothing therefore still
+    /// picks up the frame the previous paint submitted — which is what makes the viewport's
+    /// present-only paint work. (A paused repaint asks the same question and gets the same
+    /// frame back.)
     #[cfg(target_os = "linux")]
     fn present_frame(&mut self) -> Option<DmaBufHandle> {
-        let drew = std::mem::replace(&mut self.drew, false);
-        match self.ring.as_mut() {
-            Some(ring) if drew => ring.present(),
-            Some(ring) => ring.last(),
-            None => None,
-        }
+        self.ring.as_mut()?.present()
     }
 }
 
@@ -479,7 +469,6 @@ impl Presenter for GpuiInteropPresenter {
 
         #[cfg(target_os = "linux")]
         {
-            self.drew = false;
             let Some(queue) = self.queue.as_ref().cloned() else {
                 return false;
             };
@@ -511,7 +500,6 @@ impl Presenter for GpuiInteropPresenter {
                 Ok(commands) => match frame.submit(queue.as_ref(), Some(commands)) {
                     Ok(()) => {
                         note_gpu_frame(queue.as_ref());
-                        self.drew = true;
                         self.pending_reason = None;
                         self.disable_after_present = None;
                         true
@@ -683,6 +671,12 @@ impl Presenter for GpuiInteropPresenter {
         }
     }
 
+    fn defers_presentation(&self) -> bool {
+        // Only the dma-buf ring defers a frame to the next paint; the same-device path
+        // composites the frame it just submitted, so there is nothing to catch up on.
+        cfg!(target_os = "linux")
+    }
+
     fn supports_pick(&self) -> bool {
         // A browser pick has no synchronous readback: the pick targets live on the GPU
         // and `map_async` only completes on a later event-loop turn. Reporting `false`
@@ -737,14 +731,13 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_paused_repaint_does_not_consume_a_draw() {
+    fn repeated_paints_before_the_ring_exists_stay_empty() {
         let mut presenter = GpuiInteropPresenter::new();
-        // `drew` is only set by a successful `draw`; without a ring the result stays
-        // `None` and the flag is cleared, so the next paint remains a paused repaint.
+        // Every paint asks the ring (so a paint that drew nothing still picks up the
+        // frame the previous one submitted), and with no ring there is nothing to hand
+        // over — twice, without inventing a frame.
         assert!(presenter.present_frame().is_none());
-        assert!(!presenter.drew);
         assert!(presenter.present_frame().is_none());
-        assert!(!presenter.drew);
     }
 
     #[cfg(not(target_os = "linux"))]

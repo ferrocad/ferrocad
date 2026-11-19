@@ -104,7 +104,7 @@ FreeCADGui.runCommand(name, *args)     # -> whatever Activated returned (a dict/
   optional with defaults (`{}`, `True`, `False`).
 - A workbench registers at import time, like the display hooks.
 - **Errors are isolated.** A raising `Activated` returns an error dict the shell shows
-  in the status line; a raising `IsActive` disables that command and is reported once
+  in the status toast; a raising `IsActive` disables that command and is reported once
   (stderr + console). One broken command never breaks the chrome, the same policy as a
   broken workbench script.
 
@@ -214,14 +214,15 @@ tooltip can carry `GetResources()["ToolTip"]`). Placement is `FerroCAD_Surface`-
 derived from `Group`; a command with no `FerroCAD_Surface` (or an unrecognised one) lands in
 **Search**, so it cannot disappear and cannot overflow a canvas strip either.
 
-**The dock is not a toolbar.** It holds exactly the `dock` globals (`Undo`, `Redo`, `Fit`)
-and Search, in a column on the canvas' left edge. A creation tool declares `creation` and
+**The globals are not a toolbar.** They split by role: `Undo`/`Redo`/`Save` in the title
+bar, `Fit` beside the navigation cube, and Search centred in the title bar. A creation tool
+declares `creation` and
 gets a pill in the create dock (the bottom row, right after the Modify hand's bar); a shape
 verb declares
 `radial` and appears in the wheel; a utility with no gesture of its own declares
 `palette` and appears only in Search (and Dev Tools). A strip that grew one button per
-registered command is the failure this split exists to prevent — the shell's
-`globals_dock` test asserts the globals-only contract, and the create-dock test asserts the
+registered command is the failure this split exists to prevent — the shell's chrome test
+asserts the document/view split, and the create-dock test asserts the
 pills sit after the loadout bar rather than inside the dock.
 
 A **state** row runs through `Shell::run_command_in_place`, which restores the open
@@ -384,7 +385,7 @@ empty (a numeric field then fails validation until filled).
 gone. Commands now live on the floating viewport pill (grid/axes/workplane/mods), their
 anchored popovers, and the selection-driven action dock; every command is also listed in
 the Dev Tools window, and app-level commands (Dev Tools first) are in the title-bar `☰`
-menu and the status bar's bug button. See
+menu. See
 [`../../project/record/tasks/toolbar-chrome.md`](../../project/record/tasks/toolbar-chrome.md) §10.
 The **request shapes** below are unchanged — only where the buttons live.
 
@@ -513,9 +514,9 @@ return {"tool": "toy_measure"}                         # starts a registered too
   `App_Delete` is additionally pinned last inside the destructive group, so the flick
   never finds another destructive verb under it.
 
-  The dock therefore contains only the **globals and Search** (`Undo`, `Redo`, `Fit`,
-  `Search (Ctrl+K)`) in a column on the left edge, and the create dock beside the Modify
-  bar holds the creation pills, so neither ever reflows when the selection changes and
+  The chrome therefore carries only the **globals and Search** (`Undo`, `Redo`, `Save`,
+  `Fit`, `Search (Ctrl+K)`) split by role, and the create dock beside the Modify bar holds
+  the creation pills, so neither ever reflows when the selection changes and
   neither grows a row of tools. The Dock's `Move`
   split and its gizmo-options popover are gone; the gizmo is armed by selecting, and
   its settings remain reachable from `Settings/Gizmo` and Dev Tools.
@@ -580,7 +581,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 - **Tooltips** are the command's `GetResources()["ToolTip"]` plus its `Accel`, shown
   through gpui's tooltip builder on the control that runs it (header, popover row,
   dock row or Dev Tools row; bite-gpui 1.23 has the API).
-- **Status.** A command's `{"status": …}` result replaces the status line, and the
+- **Status.** A command's `{"status": …}` result becomes the action toast, and the
   shell adds the neutral pass-through report beside it (`clicked through: navicube →
   Slab`) when the pointer is over an overlay's interior.
 - Icons: `GetResources()["Pixmap"]` is accepted and ignored; the controls are text
@@ -616,7 +617,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_shell_python::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
 | **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3), `App_Rotate` (session gizmo mode) | deleting two selected objects is one undo step; `IsActive` flips with the selection; Rotate returns `gizmo: rotate` |
 | **A3 — dialogs** ✅ | the spec + token protocol, the glass modal **and the floating HUD** (`presentation`, `preview`), `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell; `App_Move` floats beside the gizmo and previews its delta |
-| **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
+| **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the action toast shows the command's message and the hover hint shows the overlay pass-through |
 | **A5 — view/tool requests** ✅ | `{"view": …}` applied by the shell (grid state + projection), `Contributions::with_tool` + `{"tool": id}` | a checkable grid command toggles the grid state and its check mark; an unknown tool id reports cleanly |
 
 A0 and A1 are the vertical slice that makes a workbench able to offer an action; A3 is
@@ -694,7 +695,7 @@ The vertical slice is in: a workbench can **offer** an action, the shell can **r
 it from the chrome (the floating viewport pill, a popover row, the dock, the Dev Tools
 list or the title-bar app menu) or a shortcut, a selection reaches both the UI and the
 command predicates, a command can **ask** the user something, change presentation, or
-start a tool, and the status line explains both the result and what a click would pass
+start a tool, and the action toast explains both the result and what a click would pass
 through — without the shell naming the workbench.
 
 ### Python
@@ -726,13 +727,13 @@ Two shape decisions fell out of the build:
 | `ferrocad_shell_core/src/ui/shortcuts.rs` | `Accelerator::parse` (the documented `Accel` subset), `is_global` (chords/named keys only) and `matches` (exact modifiers); the shell binds the globals to a window-root key handler |
 | `ferrocad_shell_core/src/workbench/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
 | `ferrocad_shell_python/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
-| `ferrocad_shell_core/src/shell/mod.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` and the Dev Tools bug button in the status bar; `start_scrub`/`drag_scrub`/`end_scrub` for the direct property handle and its scale overlay |
+| `ferrocad_shell_core/src/shell/mod.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` and the hover hint; `status_toast` and the model's status revision; `start_scrub`/`drag_scrub`/`end_scrub` for the direct property handle and its scale overlay |
 | `ferrocad_shell_core/src/ui/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/snap/mods), `split_button`, the anchored `popover` **adapter** over `ferrocad_widgets::menu`, `action_dock`, and the Dev Tools panes (`providers_panel`, `gpu_panel`, `command_list_panel`) — the panes carry no header of their own; the accordion supplies it |
 | `ferrocad_widgets/src/menu.rs` | the domain-free menu panel: `MenuInfoRow`/`MenuRow`, the status dot, additive hover, dividers and outside-press dismissal; the caller supplies `on_row`/`on_dismiss` and owns the command semantics |
 | `ferrocad_widgets/src/wheel.rs` | the radial marking menu: `WheelSlot`/`WheelTone`, pure `slot_at`/`slot_offset`, the custom-painted glass torus, hover tint, tone arc and labels, and the `WheelMenu` sidecar that owns the gesture and its overlay (`WheelEvent::{Selected, Closed}`) |
 | `ferrocad_widgets/src/accordion.rs` | the vertical accordion: `AccordionSection` (title, optional summary, preferred height), `AccordionState` (any number of open sections, plus whether the user took the choice over), and the pure `resolve_layout`/`preferred_height` that decide between `All` and a shared-height `Expanded` set. Used by the Dev Tools window; `window_chrome::content_height` reports the height a framed window really leaves for it |
 | `ferrocad_widgets/src/scroll.rs` | the scrollbar gpui does not paint: `scroll_area` (a tracked `overflow_y_scroll` container plus an overlay thumb) and `scroll_thumb` for views that own their container. Pure `thumb_bounds` sizes and places the thumb; the thumb is painted by a `canvas` so it follows the live offset without re-rendering, and it can be dragged (a track press jumps) |
-| `ferrocad_widgets/src/icon.rs` | painted pictograms. `bug` draws the literal insect (oval body, head, six legs, antennae) with paths, so no font has to carry the glyph; `active` inks it with the hover accent. The element is presentational — the status bar's `chrome::dev_tools_button` owns its hit target, hover and tooltip |
+| `ferrocad_widgets/src/icon.rs` | painted pictograms. `bug` draws the literal insect (oval body, head, six legs, antennae) with paths, so no font has to carry the glyph; `active` inks it with the hover accent. The element is presentational; the app menu's Dev Tools row is its hit target |
 | `ferrocad_widgets/src/color.rs` | colour rows for the property editor: `parse_hex`/`normalize_hex`, `swatch` (shows the stored colour) and `palette` (a fixed neutral/accent grid the host shows as an anchored overlay). `kind == "color"` is what selects it, so a mod's schema gets the picker without new UI code |
 | `ferrocad_widgets/src/slider.rs` | the range slider's geometry: `fraction`/`value_at` (log when `min > 0`, linear otherwise), `format_value` for the committed editor string, and `trigger` (the mini track in the row that opens the overlay). The host selects it only for a row that declares both `min` and `max` |
 | `ferrocad_widgets/src/scrub.rs` | the unbounded numeric control: `value_for` maps vertical travel to a value by a ratio (`48 px` doubles it; zero scrubs linearly), `Scrub` owns the starting value and travel, and `Scale`/`Tick` are the pure overlay model (a log window above zero, linear around zero and negatives, labelled ticks). `handle` paints the draggable double arrow and `scale` the overlay with its live readout and marker. Used for a quantity without a declared range; the host starts the gesture on the handle press, forwards moves from its window root and commits `Scrub::text` with the row's unit |

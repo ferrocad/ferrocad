@@ -45,8 +45,12 @@ impl Shell {
                     let mut model = self.model.lock().unwrap();
                     model.title = format!("FerroCAD — {}", opened.document);
                     model.document = opened.document.clone();
-                    model.status =
-                        format!("opened {} ({} object(s))", opened.document, opened.objects);
+                    model.note_status(format!(
+                        "opened {} ({} object{})",
+                        opened.document,
+                        opened.objects,
+                        if opened.objects == 1 { "" } else { "s" }
+                    ));
                 }
                 self.refresh(cx);
                 self.sync_stage(cx);
@@ -58,11 +62,16 @@ impl Shell {
                     ..Default::default()
                 };
                 let _ = self.apply_view(&fit, cx);
-                format!("opened {} ({} object(s))", opened.document, opened.objects)
+                format!(
+                    "opened {} ({} object{})",
+                    opened.document,
+                    opened.objects,
+                    if opened.objects == 1 { "" } else { "s" }
+                )
             }
             Err(error) => format!("open: {error}"),
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status.clone(), cx);
         cx.notify();
         status
@@ -98,7 +107,7 @@ impl Shell {
             }
             Err(error) => format!("activate: {error}"),
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status.clone(), cx);
         cx.notify();
         status

@@ -90,6 +90,11 @@ impl Tool for PlanePointsTool {
         &self.items
     }
 
+    fn anchor(&self) -> Option<Vector3> {
+        // The last plotted point: the plane grows from there towards the third.
+        self.points.last().copied().map(crate::frame::vector)
+    }
+
     fn status(&self) -> ToolStatus {
         ToolStatus::new(
             PLANE_POINTS_TOOL_ID,

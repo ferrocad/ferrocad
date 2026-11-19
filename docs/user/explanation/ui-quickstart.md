@@ -8,16 +8,16 @@ then use the linked pages as the reference.
 
 | Control | Where it sits | What it does | Read more |
 | --- | --- | --- | --- |
-| **Window chrome** | around the canvas | the title bar and application menu, the status line, and the Dev Tools window | [Window chrome](ui-chrome.md) |
-| **Toolbar** | floating pill at the top-left | Grid, Axes, WP, Gizmo, Select and Snap | [The viewport toolbar](ui-toolbars.md) |
-| **Action bar** | column on the left edge | the workbench's global commands and Search | [The globals dock](ui-action-bar.md) |
+| **Window chrome** | around the canvas | the title bar (document actions and application menu), the action toast, and the Dev Tools window | [Window chrome](ui-chrome.md) |
+| **Toolbar** | transparent row at the top-left | Grid, Axes, WP, Gizmo, Select and Snap | [The viewport toolbar](ui-toolbars.md) |
+| **Globals** | title bar and navigation cube | Undo/Redo/Save, Search, and Fit | [The globals](ui-action-bar.md) |
 | **Wheel menu** | at the pointer, on demand | the verbs for the object under the pointer: Move, Rotate, visibility, workplane and Delete in the built-in set | [The wheel menu](ui-wheel-menu.md) |
-| **Tools** | bottom row: loadout at the bottom-left, create dock right after it | the hand the pointer carries (`1 Move`/`Rotate`, `2 Push/Pull`, `3 Fillet`, `0 Inspect`), then one pill per creation category | [The tool loadout](ui-tool-loadout.md) |
+| **Tools** | bottom row: loadout at the bottom-left, create dock right after it | the hand the pointer carries (`1 Move`/`Rotate`, `2 Push/Pull`, `3 Fillet`, `4 Inspect`), then one pill per creation category | [The tool loadout](ui-tool-loadout.md) |
 
 Also in the window:
 
-- **Search palette** (`Ctrl+K`, or `Cmd+K` on macOS) — the dock's search over the
-  command registry.
+- **Search palette** (`Ctrl+K`, or `Cmd+K` on macOS) — the pill centred in the
+  title bar, over the command registry.
 - **Dev Tools** — the application menu's second window, or the inspector column in the
   browser build.
 - **Tool row** — joins the bottom-left column above the hands' bar once a tool has begun
@@ -35,20 +35,19 @@ Also in the window:
 | **Rotate** | `1` again | rotates the body with the three rings | [Rotate](ui-rotate.md) |
 | **Extrude** | `2` Push/Pull | extrudes or pockets a face along its normal | [Extrude](ui-extrude.md) |
 | **Fillet** | `3` | rounds or bevels an edge with the radius scrubber | [Fillet](ui-fillet.md) |
-| **Inspect** | `0` | selects and inspects without growing handles | [The tool loadout](ui-tool-loadout.md#the-slots) |
+| **Inspect** | `4` | selects and inspects without growing handles | [The tool loadout](ui-tool-loadout.md#the-slots) |
 
 ![Switching hands with the loadout](../images/ui-tools.gif)
 
 *The loadout switches hands; each hand re-picks its target so the relevant handles appear.*
 
-## Why the wheel and the dock both exist
+## Why the wheel and the globals both exist
 
 They serve different jobs. The wheel is the **immediate, spatial** layer: it opens at the
-pointer and offers the verbs that fit the object under it. The globals dock is the
-**persistent, explicit** layer: it keeps the commands that
-are not tied to a particular selection one click away. The wheel is fast and
-context-aware; the dock is stable and legible about state. They are complementary, not
-competing.
+pointer and offers the verbs that fit the object under it. The globals are the
+**persistent, explicit** layer: they keep the commands that are not tied to a
+particular selection one click away. The wheel is fast and context-aware; the globals are
+stable and legible about state. They are complementary, not competing.
 
 ![The wheel opening and flicking to Rotate](../images/ui-wheel.gif)
 
@@ -100,7 +99,7 @@ boolean whose inputs are not final. In those states "add" and "modify" blur, and
 is least sure what comes next. The window handles them with explicit state rather than by
 guessing:
 
-- a running tool adds its pill over the canvas instead of replacing anything, so the dock and the create dock stay put;
+- a running tool adds its pill over the canvas instead of replacing anything, so the chrome and the create dock stay put;
 - a pending transform owns the context until `Enter`/`✓` or `Esc`/`✗`;
 - the wheel does not open while a tool or dialog owns the canvas;
 - `Esc` closes the topmost transient surface first.
@@ -121,12 +120,12 @@ unpredictably.
 ![Picking a body, a face and an edge](../images/ui-pick.gif)
 
 *Selection-tied actions follow the `Select` filter: body, face or edge, named in the
-header and the status line.*
+header and the action toast.*
 
 ## Where to start
 
 - Walk the surfaces in order: [Window chrome](ui-chrome.md),
-  [The viewport toolbar](ui-toolbars.md), [The globals dock](ui-action-bar.md),
+  [The viewport toolbar](ui-toolbars.md), [The globals](ui-action-bar.md),
   [The wheel menu](ui-wheel-menu.md), [The tool loadout](ui-tool-loadout.md).
 - Learn the hands: [Move](ui-move.md), [Rotate](ui-rotate.md), [Extrude](ui-extrude.md),
   [Fillet](ui-fillet.md), and Inspect in [The tool loadout](ui-tool-loadout.md#the-slots).

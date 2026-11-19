@@ -268,13 +268,13 @@ session (`Shell::rotation_pending()`), not a second state that can drift from it
 `TransformGizmo::locked_ring` carries the axis; `set_locked_ring` mutes the siblings and
 `set_hovered_target` filters them out (a muted ring never takes the hover cue).
 `InventorViewport` repeats the filter at the press: a locked sibling or the re-pivot disc
-is refused before `begin_drag`, and queues `ViewportEvent::LockedRing`. The status line
+is refused before `begin_drag`, and queues `ViewportEvent::LockedRing`. The status toast
 names the owner. The finish pair is the same shared strip in every state (no separate
 attention rim), so the Move and Rotate pills never present two different borders.
 
 > The visual language forbids animation (`visual-language.md`: no transitions, no timed
 > flashes). A state-dependent rim on the shared pill made the two hands look different, so
-> the muted sibling rings and the status line carry the lock instead.
+> the muted sibling rings and the status toast carry the lock instead.
 
 ### 6.2 Docked bar
 

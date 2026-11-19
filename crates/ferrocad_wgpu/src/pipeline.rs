@@ -89,6 +89,9 @@ pub struct PipelineKey {
     pub depth_write: bool,
     /// Whether the draw uses the unlit, anti-aliased ribbon fragment stage.
     pub ribbon: bool,
+    /// Whether the draw uses the point-sprite vertex/fragment pair, which expands each
+    /// mark to a fixed number of device pixels.
+    pub sprite: bool,
 }
 
 impl PipelineKey {
@@ -100,15 +103,19 @@ impl PipelineKey {
             depth_compare: compare_function(depth.effective_compare()),
             depth_write: depth.effective_write(),
             ribbon: false,
+            sprite: false,
         }
     }
 
     /// Whether the six base pipelines already draw this state (the default: compare
     /// `Less` and write). The overlay *view* additionally forces its own pair of
-    /// pipelines, which is unchanged pre-existing behaviour. A ribbon is never a base
-    /// pipeline, because the base fragment stage does not bound its coverage.
+    /// pipelines, which is unchanged pre-existing behaviour. A ribbon or a sprite is
+    /// never a base pipeline: the base stages do not bound their coverage or expand them.
     pub fn is_base(&self) -> bool {
-        !self.ribbon && self.depth_compare == wgpu::CompareFunction::Less && self.depth_write
+        !self.ribbon
+            && !self.sprite
+            && self.depth_compare == wgpu::CompareFunction::Less
+            && self.depth_write
     }
 }
 
@@ -192,7 +199,7 @@ impl ScenePipelines {
                 depth_compare,
                 sample_count,
                 color_format,
-                "fs_main",
+                ("vs_main", "fs_main"),
             )
         };
 
@@ -326,7 +333,8 @@ impl ScenePipelines {
     /// The pipeline for `topology` with `depth` bound.
     ///
     /// The default state returns one of the six base pipelines; any other state gets a
-    /// variant built on first use and cached on [`PipelineKey`].
+    /// variant built on first use and cached on [`PipelineKey`]. `sprite` selects the
+    /// point-sprite stage, which expands a mark to a fixed pixel size.
     pub fn for_state(
         &mut self,
         device: &wgpu::Device,
@@ -334,9 +342,11 @@ impl ScenePipelines {
         topology: Topology,
         depth: &DepthState,
         ribbon: bool,
+        sprite: bool,
     ) -> &wgpu::RenderPipeline {
         let mut key = PipelineKey::new(overlay, topology, depth);
         key.ribbon = ribbon;
+        key.sprite = sprite;
         if key.is_base() {
             return self.for_draw(overlay, topology);
         }
@@ -374,15 +384,16 @@ fn create_pipeline(
     depth_compare: wgpu::CompareFunction,
     sample_count: u32,
     color_format: wgpu::TextureFormat,
-    fragment_entry: &str,
+    entries: (&str, &str),
 ) -> wgpu::RenderPipeline {
     let vertex_buffers = scene_vertex_layout();
+    let (vertex_entry, fragment_entry) = entries;
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(vertex_entry),
             compilation_options: Default::default(),
             buffers: &vertex_buffers,
         },
@@ -457,8 +468,22 @@ fn create_variant(
         key.depth_compare,
         sample_count,
         color_format,
-        if key.ribbon { "fs_ribbon" } else { "fs_main" },
+        stage_entries(key),
     )
+}
+
+/// The shader entry points a key selects.
+///
+/// A sprite expands and fills its own mark; a ribbon is a producer-authored strip that
+/// only needs the lateral feather; everything else is the shaded surface stage.
+fn stage_entries(key: PipelineKey) -> (&'static str, &'static str) {
+    if key.sprite {
+        ("vs_sprite", "fs_sprite")
+    } else if key.ribbon {
+        ("vs_main", "fs_ribbon")
+    } else {
+        ("vs_main", "fs_main")
+    }
 }
 
 #[cfg(test)]

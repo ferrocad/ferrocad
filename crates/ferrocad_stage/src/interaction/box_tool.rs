@@ -236,6 +236,13 @@ impl Tool for BoxTool {
         self.rebuild();
     }
 
+    fn anchor(&self) -> Option<Vector3> {
+        // The corner the box grows from: the press once it is placed, else the placement
+        // the ghost is sitting on.
+        self.anchor
+            .or_else(|| self.hover.as_ref().map(|target| target.frame.origin))
+    }
+
     fn status(&self) -> ToolStatus {
         ToolStatus::new(
             BOX_TOOL_ID,
@@ -280,6 +287,7 @@ impl Tool for BoxTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Workplane;
     use crate::gizmo::ManipulatorFrame;
     use crate::interaction::Tool;
 
@@ -344,6 +352,38 @@ mod tests {
         assert_eq!(&commit.values[3..6], &[5.0, 5.0, 10.0]);
         // A box is a new body, so it names no host.
         assert!(commit.host.is_none());
+    }
+
+    /// The tool publishes the corner it is working at, so a host can put the session's
+    /// `✗`/`✓` pair **beside the box** instead of under the pointer (where the next click
+    /// lands).
+    #[test]
+    fn the_anchor_is_the_corner_the_box_grows_from() {
+        let mut tool = BoxTool::new();
+        assert_eq!(tool.anchor(), None, "nothing placed and no hover: no anchor");
+
+        // The hovered placement: the ghost's corner, before any click.
+        let target = HoverTarget::of_workplane(&Workplane::world());
+        tool.hover(Some(&target));
+        assert_eq!(tool.anchor(), Some(target.frame.origin));
+
+        // A press replaces it with the corner it anchored.
+        tool.on_event(
+            &PointerEvent {
+                kind: PointerKind::Down,
+                position: [0, 0],
+                button: Some(MouseButton::Left),
+                hit: None,
+                projection: None,
+            },
+            Some(Snap {
+                point: [2.0, 3.0, 4.0],
+                kind: crate::snap::SnapKind::Point,
+                local: None,
+                major: false,
+            }),
+        );
+        assert_eq!(tool.anchor(), Some(Vector3::new(2.0, 3.0, 4.0)));
     }
 
     #[test]

@@ -672,9 +672,9 @@ impl Shell {
     pub(in crate::shell) fn show_rotation_lock(&mut self, attempted: usize, cx: &mut Context<Self>) {
         let axis = self.rotation_pending().unwrap_or(attempted).min(AXIS_COUNT - 1);
         let axis = ["X", "Y", "Z"][axis];
-        self.model.lock().unwrap().status = format!(
+        self.model.lock().unwrap().note_status(format!(
             "Pending rotate {axis} — apply (✓ / Enter) or cancel (✗ / Esc) before changing the axis"
-        );
+        ));
         cx.notify();
     }
 
@@ -803,7 +803,7 @@ impl Shell {
         }
         let orientation = self.object_rotation_now(cx);
         if orientation.is_same(&Rotation::identity(), 1e-9) {
-            self.model.lock().unwrap().status = "rotation is already 0°".to_string();
+            self.model.lock().unwrap().note_status("rotation is already 0°".to_string());
             cx.notify();
             return;
         }

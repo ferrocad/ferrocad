@@ -28,12 +28,11 @@ use ferrocad_inventor::{
     Node, NodeKind, Scene, ShaderParameter, ShaderStage, ShaderStageKind, Topology,
     depth_function, light_model, material_binding, pick_style,
 };
-use rustpython_vm::builtins::PyType;
+use rustpython_vm::builtins::{PyStrRef, PyType};
 use rustpython_vm::function::{FuncArgs, OptionalArg};
 use rustpython_vm::types::{Constructor, Representable};
 use rustpython_vm::{
-    Context, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine, pyclass,
-    pymodule,
+    Context, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine, pyclass, pymodule,
 };
 
 pub(crate) use coin::module_def as coin_module_def;
@@ -1378,11 +1377,27 @@ mod coin {
     // The pull overlay bridge (the same registry the CPython facade fills)
     // -----------------------------------------------------------------------
 
-    /// `coin.addOverlay(node)` — extract `node` now and keep it for the shell.
+    /// `coin.addOverlay(node, role=None)` — extract `node` now and keep it for the
+    /// shell.
+    ///
+    /// `role` is the provider feature the scene belongs to (the facade passes it while
+    /// a provider callback registers the tree), which is what lets the viewport replay
+    /// the grid on a candidate plane.
     #[pyfunction]
-    fn addOverlay(node: PyRef<PyNode>, vm: &VirtualMachine) -> PyResult<()> {
+    fn addOverlay(
+        node: PyRef<PyNode>,
+        role: OptionalArg<PyStrRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
         let root = node.snapshot(vm)?;
-        ferrocad_inventor::overlays::put(Arc::as_ptr(&node.inner) as usize, Scene { root });
+        let role = role
+            .into_option()
+            .map(|role| role.to_str().unwrap_or_default().to_string());
+        ferrocad_inventor::overlays::put_with_role(
+            Arc::as_ptr(&node.inner) as usize,
+            Scene { root },
+            role,
+        );
         Ok(())
     }
 

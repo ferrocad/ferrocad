@@ -137,7 +137,7 @@ impl Shell {
             m.selection = items;
             m.selected = primary;
             m.properties = properties;
-            m.status = status;
+            m.note_status(status);
         }
         if let Some(node) = &settings_node {
             self.open_settings_card(node, cx);
@@ -280,10 +280,19 @@ impl Shell {
         // The tree is the one place that says which document is active, so a switch
         // made outside the shell (`FreeCAD.setActiveDocument` at the console) keeps the
         // title and the save name right without a second query.
-        let active = tree
-            .iter()
-            .find(|document| document.active)
-            .map(|document| document.name.clone());
+        let active_document = tree.iter().find(|document| document.active);
+        let active = active_document.map(|document| document.name.clone());
+        // The document's history is part of its model: keep the top of each stack for
+        // the Undo/Redo tooltips and the toast's inline Undo.
+        let (undo_label, undo_depth, redo_label) = active_document
+            .map(|document| {
+                (
+                    document.undo_names.first().cloned().unwrap_or_default(),
+                    document.undo_names.len(),
+                    document.redo_names.first().cloned().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
         if let Some(focused) = &self.tree_document
             && !tree.iter().any(|document| document.name == *focused)
         {
@@ -295,6 +304,9 @@ impl Shell {
             m.selection = next;
             m.selected = primary;
             m.properties = properties;
+            m.undo_label = undo_label;
+            m.undo_depth = undo_depth;
+            m.redo_label = redo_label;
             if let Some(active) = active
                 && m.document != active
             {

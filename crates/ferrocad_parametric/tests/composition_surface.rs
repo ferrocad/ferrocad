@@ -305,11 +305,17 @@ fn the_settings_root_is_not_a_document() {
     assert!(!*active, "the synthetic root is never a document");
     assert_eq!(
         objects,
-        &vec![(
-            "Settings/grid".to_string(),
-            "FerroCAD::Settings".to_string()
-        )],
-        "the document half's grid card is the one feature it owns"
+        &vec![
+            (
+                "Settings/grid".to_string(),
+                "FerroCAD::Settings".to_string()
+            ),
+            (
+                "Settings/Theme".to_string(),
+                "FerroCAD::Settings".to_string()
+            ),
+        ],
+        "the document half's cards: the grid, and the token table beside it"
     );
 }
 

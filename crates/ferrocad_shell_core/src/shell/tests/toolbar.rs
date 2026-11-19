@@ -497,16 +497,16 @@ fn the_snap_control_lives_in_the_header_and_not_the_dock(cx: &mut TestAppContext
         assert_eq!(grid_mode.short_label(), "Grid");
     }
     assert!(
-        cx.debug_bounds("dock-Draft_Snap_Grid").is_none(),
-        "the snap modes left the action dock"
+        cx.debug_bounds("header-Draft_Snap_Grid").is_none(),
+        "the snap modes live in the popover, not the header"
     );
     assert!(
-        cx.debug_bounds("dock-App_Delete").is_none(),
-        "the selection verbs are radial slots, not dock rows"
+        cx.debug_bounds("title-App_Delete").is_none(),
+        "the selection verbs are radial slots, not header controls"
     );
     assert!(
-        cx.debug_bounds("dock-search").is_some(),
-        "the dock still carries the global search slot"
+        cx.debug_bounds("header-search").is_some(),
+        "the header still carries the global search pill"
     );
 
     // Opening the caret does not toggle the switch.
@@ -1757,10 +1757,10 @@ fn editing_a_settings_row_updates_the_properties(cx: &mut TestAppContext) {
 /// into Dev Tools — the window starts closed and the command is hidden from every
 /// other surface. The viewport header keeps only the environment controls.
 ///
-/// The headless test platform always reports server-side decorations, so
-/// `window_frame_with_leading` returns the content unchanged and paints no title
-/// bar. This renders the same `title_bar` element the frame composes, with the
-/// shell's real menu, so the popover and its rows can be clicked. The frame's own
+/// The headless test platform always reports server-side decorations, so the frame
+/// draws its fallback leading bar instead of a client title bar. This renders the same
+/// `title_bar_with_controls` element the frame composes, with the shell's real menu and
+/// document actions, so the popover and its rows can be clicked. The frame's own
 /// client-decoration branch stays visual-only (see
 /// `docs/project/record/tasks/toolbar-chrome.md` §10).
 #[gpui::test]
@@ -1815,6 +1815,33 @@ fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
         "the app menu leads the title bar (at {:?})",
         menu.origin.x
     );
+    // The document actions ride beside the document's name, after the menu and before
+    // the window controls.
+    let mut previous = menu;
+    for selector in ["title-App_Undo", "title-App_Redo", "title-App_Save"] {
+        let action = bar_cx.debug_bounds(selector).expect(selector);
+        assert!(
+            title_bar.contains(&action.center()),
+            "{selector} is inside the title bar ({action:?})"
+        );
+        assert!(
+            action.origin.x > previous.origin.x,
+            "{selector} follows the previous title-bar action ({action:?} / {previous:?})"
+        );
+        previous = action;
+    }
+    // Search is centred between the document group and the window buttons.
+    let search = bar_cx.debug_bounds("header-search").expect("Search");
+    assert!(
+        title_bar.contains(&search.center()),
+        "Search is inside the title bar ({search:?})"
+    );
+    assert!(
+        (search.center().x - title_bar.center().x).abs() < px(2.),
+        "Search is centred in the title bar (search {:?}, bar {:?})",
+        search.center(),
+        title_bar.center()
+    );
     assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
 
     // It lists Dev Tools, which no other surface offers.
@@ -1848,52 +1875,6 @@ fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
             .iter()
             .any(|handle| handle.downcast::<DevTools>().is_some()),
         "the Dev Tools window exists"
-    );
-}
-
-/// The status bar's literal bug is the discoverable toggle: it opens and closes
-/// Dev Tools without going through the title-bar menu.
-#[gpui::test]
-fn the_status_bar_bug_toggles_dev_tools(cx: &mut TestAppContext) {
-    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let model = boot_shell(cx);
-    let window = cx.update(|cx| {
-        let model = model.clone();
-        cx.open_window(Default::default(), move |_window, cx| {
-            cx.new(|cx| Shell::from_model(model.clone(), cx))
-        })
-        .unwrap()
-    });
-    let mut cx = VisualTestContext::from_window(window.into(), cx);
-    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
-    draw(&mut cx);
-
-    let bug = cx
-        .debug_bounds("dev-tools-bug")
-        .expect("the status bar bug");
-    let viewport = cx.debug_bounds("main-viewport").expect("the viewport");
-    assert!(
-        bug.center().y > viewport.center().y,
-        "the bug sits in the bottom strip (bug {bug:?}, viewport {viewport:?})"
-    );
-    assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
-
-    click_at(&mut cx, "dev-tools-bug");
-    assert!(
-        cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)),
-        "the bug opens Dev Tools"
-    );
-    assert!(
-        cx.windows()
-            .iter()
-            .any(|handle| handle.downcast::<DevTools>().is_some()),
-        "the Dev Tools window exists"
-    );
-
-    click_at(&mut cx, "dev-tools-bug");
-    assert!(
-        !cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)),
-        "a second click closes it"
     );
 }
 

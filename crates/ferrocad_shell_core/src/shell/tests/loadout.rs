@@ -38,8 +38,8 @@ fn slot_labels_name_the_hand_they_equip() {
     );
     assert_eq!(
         Slot::ALL.map(Slot::key),
-        ["1", "2", "3", "0"],
-        "the Modify hand's digits"
+        ["1", "2", "3", "4"],
+        "the Modify hand's digits, in bar order"
     );
     assert_eq!(
         CREATION_KEYS,
@@ -343,19 +343,19 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
         "the bar is drawn over the canvas"
     );
     for (key, selector) in [
-        ("0", "loadout-0"),
         ("1", "loadout-1"),
         ("2", "loadout-2"),
         ("3", "loadout-3"),
+        ("4", "loadout-4"),
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "slot {key} has a pill");
     }
     // Each pill carries the glyph of the hand it equips.
     for selector in [
-        "loadout-0-icon",
         "loadout-1-icon",
         "loadout-2-icon",
         "loadout-3-icon",
+        "loadout-4-icon",
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "{selector} is painted");
     }
@@ -391,7 +391,7 @@ fn inspect_offers_a_scope_switcher(cx: &mut TestAppContext) {
         "Move has no scope switcher"
     );
 
-    press_root(&mut cx, &shell, "0");
+    press_root(&mut cx, &shell, "4");
     draw(&mut cx);
     assert!(
         cx.debug_bounds("inspect-bar").is_some(),
@@ -542,8 +542,8 @@ fn the_move_and_inspect_slots_are_separate_hands(cx: &mut TestAppContext) {
         "tool: Move"
     );
 
-    // 0 → Idle: its own slot. The selection stays, the handles and form leave.
-    press_root(&mut cx, &shell, "0");
+    // 4 → Inspect: its own slot. The selection stays, the handles and form leave.
+    press_root(&mut cx, &shell, "4");
     draw(&mut cx);
     let (slot, open, armed, selection, status) = shell.read_with(&cx, |shell, _| {
         let model = shell.model.lock().unwrap();
@@ -555,7 +555,7 @@ fn the_move_and_inspect_slots_are_separate_hands(cx: &mut TestAppContext) {
             model.status.clone(),
         )
     });
-    assert_eq!(slot, Slot::Inspect, "0 equips Inspect, not a paused Move");
+    assert_eq!(slot, Slot::Inspect, "4 equips Inspect, not a paused Move");
     assert!(!open, "Inspect hides the form");
     assert!(!armed, "Inspect hosts no handles");
     assert_eq!(selection, 1, "the selection is kept for inspection");

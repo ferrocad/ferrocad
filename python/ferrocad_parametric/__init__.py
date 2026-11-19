@@ -355,10 +355,15 @@ def _edit_dress_up(obj, mode, first, second):
 
 
 def _interaction(obj, manipulator, action, element, values):
-    """Apply a manipulator commit: a Part dress-up, a push/pull or a move.
+    """Apply a manipulator commit: a primitive create, a Part dress-up, a push/pull or a
+    move.
 
-    Three operations reach this workbench:
+    These operations reach this workbench:
 
+    * ``box`` / ``cylinder`` / ``sphere`` / ``cone`` with ``create`` — a primitive
+      tool's commit: the parameters, then the base point (a sphere's centre) and, for the
+      two solids with an axis, the placement frame's normal. Nothing is named, so the
+      object is new in every case.
     * ``dress_up`` / ``fillet``/``chamfer`` — the Rust edge scrubber; ``values`` are
       the radius and the second distance.
     * ``push_pull`` / ``extrude``/``pocket`` — the Rust face stem; ``values[0]`` is the
@@ -379,8 +384,13 @@ def _interaction(obj, manipulator, action, element, values):
         return _create_polyline([float(value) for value in values])
 
     if manipulator == "box" and action == "create":
-        # The Box tool's strip committed: size and corner, nothing else.
+        # The Box tool's row committed: size and corner, nothing else.
         return _create_box([float(value) for value in values])
+
+    if manipulator in _SOLID_COMMITS and action == "create":
+        # Cylinder / Sphere / Cone: the tool's numbers, then its base (or centre) and — for
+        # the two solids with an axis — the placement frame's normal.
+        return _SOLID_COMMITS[manipulator]([float(value) for value in values])
 
     if manipulator == "sketch_polyline" and action == "create":
         return _create_sketch_polyline([float(value) for value in values])
@@ -1360,6 +1370,160 @@ class _MakeBoxCommand:
 
 
 FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
+
+
+def _solid_axis(values, index):
+    """The unit axis a commit carries *after* its base point, defaulting to world `+Z`.
+
+    The tool sends the placement frame's normal, so a cylinder on a face grows out of that
+    face. A shorter (or degenerate) tail is a script or a host that only knows the point,
+    and the world axis is what those always meant.
+    """
+    tail = values[index:]
+    if len(tail) < 3:
+        return (0.0, 0.0, 1.0)
+    nx, ny, nz = (float(component) for component in tail[:3])
+    length = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if not math.isfinite(length) or length <= 1e-9:
+        return (0.0, 0.0, 1.0)
+    return (nx / length, ny / length, nz / length)
+
+
+def _commit_solid(shape, name):
+    """Add a created solid as one undoable transaction (the creation tools' commit)."""
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction(f"Create {name}")
+    try:
+        solid = doc.addObject("Part::Feature", name)
+        solid.Shape = shape
+        _add_appearance(solid)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": solid.Name}
+
+
+def _create_cylinder(values):
+    """One `cylinder` commit: radius, height, base point and axis."""
+    if len(values) < 5:
+        return {"ok": False, "error": "a cylinder needs a radius, a height and a base"}
+    radius, height, x, y, z = values[:5]
+    if radius <= 0.0 or height <= 0.0:
+        return {"ok": False, "error": "a cylinder needs a positive radius and height"}
+    try:
+        shape = Part.makeCylinder(
+            radius, height, pnt=(x, y, z), dir=_solid_axis(values, 5)
+        )
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        return {"ok": False, "error": str(exc)}
+    return _commit_solid(shape, "Cylinder")
+
+
+def _create_sphere(values):
+    """One `sphere` commit: radius and centre. A sphere has no axis to orient."""
+    if len(values) < 4:
+        return {"ok": False, "error": "a sphere needs a radius and a centre"}
+    radius, x, y, z = values[:4]
+    if radius <= 0.0:
+        return {"ok": False, "error": "a sphere needs a positive radius"}
+    try:
+        shape = Part.makeSphere(radius, center=(x, y, z))
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        return {"ok": False, "error": str(exc)}
+    return _commit_solid(shape, "Sphere")
+
+
+def _create_cone(values):
+    """One `cone` commit: base radius, top radius, height, base point and axis.
+
+    `r2 = 0` is a cone; any other pair is a frustum. Both at zero is no solid at all.
+    """
+    if len(values) < 6:
+        return {
+            "ok": False,
+            "error": "a cone needs two radii, a height and a base",
+        }
+    r1, r2, height, x, y, z = values[:6]
+    if height <= 0.0 or (r1 <= 0.0 and r2 <= 0.0):
+        return {"ok": False, "error": "a cone needs a height and at least one radius"}
+    try:
+        shape = Part.makeCone(
+            r1, r2, height, pnt=(x, y, z), dir=_solid_axis(values, 6)
+        )
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        return {"ok": False, "error": str(exc)}
+    return _commit_solid(shape, "Cone")
+
+
+#: The manipulator id a creating commit carries -> the handler that owns it.
+_SOLID_COMMITS = {
+    "cylinder": _create_cylinder,
+    "sphere": _create_sphere,
+    "cone": _create_cone,
+}
+
+
+class _MakePrimitiveCommand:
+    """``Part_Cylinder``/``Part_Sphere``/``Part_Cone`` — arm the matching solid tool.
+
+    The three commands differ only in the tool they arm, so they share one class; the
+    prototype is ``Part_Box``'s (a pointer is optional, the numbers are the input).
+    """
+
+    TOOL = ""
+    MENU = ""
+    TIP = ""
+
+    def GetResources(self):
+        return {
+            "MenuText": self.MENU,
+            "ToolTip": self.TIP,
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            # A creation tool: it lives in the split creation pill (`⊕ Solid ▾`), never as
+            # its own dock button. The category is what the pill's flyout tiers by.
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Solid",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self):
+        return {"tool": self.TOOL}
+
+
+class _MakeCylinderCommand(_MakePrimitiveCommand):
+    """``Part_Cylinder`` — arm the cylinder tool (`R`, `H`)."""
+
+    TOOL = "cylinder"
+    MENU = "Cylinder"
+    TIP = "Place a cylinder: click its base, then type the radius and height"
+
+
+class _MakeSphereCommand(_MakePrimitiveCommand):
+    """``Part_Sphere`` — arm the sphere tool (`R`)."""
+
+    TOOL = "sphere"
+    MENU = "Sphere"
+    TIP = "Place a sphere: click its centre, then type the radius"
+
+
+class _MakeConeCommand(_MakePrimitiveCommand):
+    """``Part_Cone`` — arm the cone tool (`R1`, `R2`, `H`)."""
+
+    TOOL = "cone"
+    MENU = "Cone"
+    TIP = "Place a cone: click its base, then type both radii and the height"
+
+
+FreeCADGui.addCommand("Part_Cylinder", _MakeCylinderCommand())
+FreeCADGui.addCommand("Part_Sphere", _MakeSphereCommand())
+FreeCADGui.addCommand("Part_Cone", _MakeConeCommand())
 
 
 # ---------------------------------------------------------------------------

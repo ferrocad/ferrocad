@@ -400,6 +400,11 @@ class ModProviderTests(unittest.TestCase):
         FerroCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the overlay is registered")
+        self.assertEqual(
+            coin_suite.COIN.last_role,
+            "grid",
+            "the overlay carries the provider feature, so the host can preview it",
+        )
 
         result = FerroCADGui.setActiveProvider(GRID, "ferrocad")
         self.assertEqual(result["previous"], "coin")

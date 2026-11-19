@@ -48,7 +48,7 @@ pending, and the fillet is applied when you accept it with `✓`.*
   current radius. Drag it — or type in the same docked field — and `✓` edits that
   `Part::Fillet`; it does not stack a second one. Selecting any *other* edge of the body
   still makes a new fillet, as you would expect.
-- A fillet the kernel refuses is **rolled back**: the status line reports it, the model is
+- A fillet the kernel refuses is **rolled back**: the status toast reports it, the model is
   exactly as it was, and the handle returns to its resting value — no ghost is left
   hanging.
 

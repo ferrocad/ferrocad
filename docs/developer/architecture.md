@@ -333,7 +333,7 @@ ferrocad_shell_python -> ferrocad_shell_core, ferrocad_viewport,
                       may    -> ferrocad_shell_rust  [only with the `part` feature: the edition links Part]
                       must NOT -> ferrocad_part_gui  [a workbench's manipulator is the edition's]
 ferrocad_shell_doc -> ferrocad_core, ferrocad_stage, ferrocad_shell_api,
-                      serde_json                     [the document half; kernel-free]
+                      ferrocad_theme, serde_json  [the document half; kernel-free]
                       must NOT -> ferrocad_part, ferrocad_occt, gpui, pyo3
 ferrocad_shell_rust -> ferrocad_shell_doc, ferrocad_core, ferrocad_part,
                       ferrocad_occt, ferrocad_geom   [the Part engine; same in both hosts]

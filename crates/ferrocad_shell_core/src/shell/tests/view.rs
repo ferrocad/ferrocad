@@ -404,7 +404,10 @@ fn an_active_tool_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext)
     draw(&mut cx);
 
     let idle_canvas = cx.debug_bounds("main-canvas").expect("the canvas");
-    assert!(cx.debug_bounds("globals-dock").is_some(), "the idle dock");
+    assert!(
+        cx.debug_bounds("viewport-header").is_some(),
+        "the idle header"
+    );
     assert!(
         cx.debug_bounds("tool-strip").is_none(),
         "no active-action surface while idle"
@@ -446,21 +449,24 @@ fn an_active_tool_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext)
     assert_eq!(active_canvas.size.width, idle_canvas.size.width);
     assert_eq!(active_canvas.size.height, idle_canvas.size.height);
 
-    // Stack, do not swap: the dock keeps its column and the hands keep their row, so a
-    // session never takes the chrome off the screen.
+    // Stack, do not swap: the header keeps its globals and the hands keep their row, so
+    // a session never takes the chrome off the screen.
     assert!(
-        cx.debug_bounds("globals-dock").is_some(),
-        "the dock is still rendered during a session"
+        cx.debug_bounds("viewport-header").is_some(),
+        "the header is still rendered during a session"
     );
-    assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
-    assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
-    // Both actions carry a glyph: an X to abort, a check to commit.
-    for selector in ["tool-cancel-icon", "tool-finish-icon"] {
-        assert!(
-            cx.debug_bounds(selector).is_some(),
-            "{selector} is painted"
-        );
-    }
+    assert!(
+        cx.debug_bounds("title-App_Undo").is_some(),
+        "the globals are still in the header during a session"
+    );
+    // The row carries **no buttons**: ending the session is the shared `✗`/`✓` decision
+    // pill the Move form and a released manipulator use, floating over the canvas.
+    assert!(
+        cx.debug_bounds("tool-finish-pill").is_some(),
+        "the shared decision pill is drawn"
+    );
+    assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a segment");
+    assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a segment");
 
     // The row above the hands' bar, sharing its left edge: the completion row belongs to
     // the bottom-left column, not to the canvas' centre.
@@ -471,6 +477,15 @@ fn an_active_tool_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext)
         strip.origin.y + strip.size.height <= loadout.origin.y,
         "the row is above the hands (row {strip:?}, bar {loadout:?})"
     );
+    // The pair floats clear of the row: the row is the instrument, the pair is the
+    // gesture's control.
+    for selector in ["tool-cancel", "tool-finish"] {
+        let segment = cx.debug_bounds(selector).expect(selector);
+        assert!(
+            !strip.contains(&segment.center()),
+            "{selector} is not part of the docked row ({strip:?} / {segment:?})"
+        );
+    }
 }
 
 /// §2.2/§3.5: the HUD's Finish button and the shell's `Enter` path end the session

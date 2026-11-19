@@ -147,6 +147,27 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   scene. Clip depth is in the backend's `[0, 1]` (the sample's old baked perspective used
   the GL-style `[-1, 1]`, which mis-clipped near geometry).
 
+### 4.1 Presenting a frame (and why a discrete update needs two paints)
+
+The zero-copy presenter hands gpui a dma-buf it can sample **immediately**: the ring
+only presents a frame whose GPU-completion fence has already signalled
+(`WgpuSharedBufferRing::present`), and that is never the frame the same paint
+submitted microseconds earlier. A paint therefore draws frame *n* and shows frame
+*n−1*. The trail is invisible while something paints continuously — an orbit, a drag,
+an inertia or snap animation — because the next paint is already coming. A **discrete**
+update is the problem: a click or a single hover move draws its frame and nothing paints
+after it, so the change stays off screen until some later event repaints. That is the
+"the ghost stays put, then the next event moves it" report, and it is why a click looked
+like it needed two.
+
+`Presenter::take_present_pending` closes it. The presenter records that the paint
+before this one drew a frame the window has not been handed, and `render` asks for one
+more paint. That paint is **present-only** (`present_poll`): it hands the frame over
+without submitting another one, so the loop ends after a single paint. The request is
+skipped when another frame is already scheduled (a drag, an animation, the face dwell,
+a deferred hover pick), because those present the frame on their next paint anyway. The
+image path needs nothing like this: its readback is already a paint of its own.
+
 ## 5. What is implemented vs not
 
 **Implemented**

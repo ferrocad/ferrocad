@@ -14,26 +14,24 @@ rest of this page is the longer tour.
 
 | Control | Where it sits | What it is for | Read more |
 | --- | --- | --- | --- |
-| **Window chrome** | around the canvas | the title bar, the application menu, the status line and the Dev Tools window | [Window chrome](ui-chrome.md) |
-| **Toolbar** | floating pill at the top-left of the canvas | environment state: grid, axes, workplane, gizmo, selection filter and snapping | [The viewport toolbar](ui-toolbars.md) |
-| **Globals dock** | column on the left edge of the canvas | the workbench's global commands (Undo, Redo, Fit) and Search | [The globals dock](ui-action-bar.md) |
+| **Window chrome** | around the canvas | the title bar (document actions), the application menu, the action toast and the Dev Tools window | [Window chrome](ui-chrome.md) |
+| **Toolbar** | transparent row at the top-left of the canvas | environment state: grid, axes, workplane, gizmo, selection filter and snapping | [The viewport toolbar](ui-toolbars.md) |
+| **Globals** | title bar (Undo/Redo/Save and Search), navigation cube (Fit) | the workbench's global commands | [The globals](ui-action-bar.md) |
 | **Wheel menu** | at the pointer, on demand | the verbs that apply to the object under the pointer | [The wheel menu](ui-wheel-menu.md) |
 | **Tools** | bottom row: the loadout at the bottom-left, the create dock right after it | the hand the pointer carries, the topology filter, and the pill per creation category | [The tool loadout](ui-tool-loadout.md) |
 
 ```mermaid
 flowchart TD
-    Frame["Window chrome: title bar, app menu, status line"]
+    Frame["Window chrome: title bar, app menu, action toast"]
     Canvas["3-D canvas"]
-    Header["Toolbar pill, top-left"]
+    Header["Toolbar row, top-left"]
     Loadout["Tool loadout, bottom-left"]
     Create["Create dock, right of the loadout"]
-    Dock["Globals dock, left edge"]
     Wheel["Wheel menu, at the pointer"]
     Frame --> Canvas
     Canvas --> Header
     Canvas --> Loadout
     Canvas --> Create
-    Canvas --> Dock
     Canvas --> Wheel
 ```
 
@@ -58,20 +56,21 @@ differ.
 
 The `Select` filter decides what a click reports. The animation keeps Inspect equipped
 and moves the filter from `Body` to `Face` to `Edge`; the highlighted scope and the
-status line follow the same store:
+action toast follows the same store:
 
 ![Picking a body, a face and an edge](../images/ui-pick.gif)
 
 *Animation (desktop): `Body` selects the whole body, `Face` highlights a face, and
 `Edge` highlights an edge. The header label, the `Body | Face | Edge` switcher and the
-status line name the same scope.*
+action toast name the same scope.*
 
 ## Why the controls are arranged this way
 
 - **The canvas comes first.** The toolbar is an overlay, not a pane header, so the
   scene reaches the title bar. Opening a tool or a dialog does not move the canvas
-  rectangle either: the globals are a column on the left edge, the hands and the tool's
-  completion row share the bottom-left column, and that column grows upward.
+  rectangle either: the document globals live in the title bar, the view-only ones sit
+  beside the navigation cube, and the hands and the tool's completion row share the
+  bottom-left column, which grows upward.
 - **State is ink, not a box.** An active tool, a checked command and a custom
   workplane are drawn in accent ink. A background is kept for hover, the active loadout
   slot and a selected segment, so the scene stays visually dominant.

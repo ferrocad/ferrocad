@@ -1,8 +1,9 @@
 //! `Shell` methods: the completion row's numeric fields (C2).
 //!
 //! An armed creation tool publishes its parameters on [`ToolStatus::fields`]; once the
-//! tool has **begun** (a click placed its anchor) the completion row draws them as one
-//! tabular-monospace row, and this module owns the small editing machine behind it:
+//! tool has **begun** (a click placed its anchor) the completion row draws them as the
+//! same boxed fields the transform forms use, and this module owns the small editing
+//! machine behind it:
 //!
 //! ```text
 //! Tab / Shift+Tab   focus the next / previous field (the tool's own values seed it)
@@ -84,6 +85,25 @@ impl Shell {
         self.tool_field = Some(ToolFieldEdit {
             index: next,
             text: fields[next].value.clone(),
+            replace: true,
+        });
+        cx.notify();
+        true
+    }
+
+    /// Focus one field by index (a click on its box), seeded with its current value.
+    ///
+    /// The row is driven by the shell's edit state rather than a `TextInput`, so a click
+    /// only has to name the field: the root key path then types into it exactly as `Tab`
+    /// does.
+    pub(crate) fn focus_tool_field(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let fields = self.tool_fields();
+        let Some(field) = fields.get(index) else {
+            return false;
+        };
+        self.tool_field = Some(ToolFieldEdit {
+            index,
+            text: field.value.clone(),
             replace: true,
         });
         cx.notify();

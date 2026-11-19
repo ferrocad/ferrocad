@@ -154,8 +154,9 @@ def _build_fake_coin():
     module.SoShaderParameter3f = _fake_type("SoShaderParameter3f")
     module._registered = []
 
-    def add_overlay(node):
+    def add_overlay(node, role=None):
         module._registered.append(node)
+        module.last_role = role
 
     def remove_overlay(node):
         for index, candidate in enumerate(module._registered):

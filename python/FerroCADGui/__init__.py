@@ -71,6 +71,11 @@ _PROVIDER_SERIAL: int = 0
 #: backend does not spam the console on every switch.
 _PROVIDER_REPORTED: set = set()
 
+#: The feature whose provider callback is running, if any. An overlay registered
+#: from ``activate``/``refresh`` belongs to that feature: the host uses the role to
+#: replay the grid on a candidate plane instead of duplicating every overlay.
+_PROVIDER_ACTIVATING = None
+
 #: The parameter group a mod's provider choice is persisted in.
 PROVIDER_PREFERENCES = "User parameter:BaseApp/Preferences/Mods"
 
@@ -716,15 +721,22 @@ def deactivateProvider(feature: str) -> dict:
 
 def _invoke_provider(record, feature, hook, result, statuses) -> None:
     """Run one provider callback, isolating and collecting its result."""
+    global _PROVIDER_ACTIVATING
     callback = record.get(hook)
     if callback is None:
         return
+    # A mod registers its overlay from ``activate`` (and again from ``refresh``); the
+    # callback is the only place that knows *which* feature the scene belongs to.
+    previous = _PROVIDER_ACTIVATING
+    _PROVIDER_ACTIVATING = feature
     try:
         value = callback()
     except Exception as exc:  # noqa: BLE001 - one broken backend is not fatal
         _report_provider(feature, record["backend"], hook, exc)
         result["errors"].append(f"{hook}: {_error_text(exc)}")
         return
+    finally:
+        _PROVIDER_ACTIVATING = previous
     if not isinstance(value, dict):
         return
     view = value.get("view")
@@ -1719,7 +1731,7 @@ def _coin_module():
     return coin
 
 
-def addOverlay(node) -> None:
+def addOverlay(node, role=None) -> None:
     """Register a Coin node as a viewport overlay (FerroCAD extension).
 
     The node is **extracted now**: the shell keeps a copy of its subtree and draws
@@ -1727,8 +1739,20 @@ def addOverlay(node) -> None:
     replaces Coin's ``getSceneGraph()``; see ``docs/developer/workbenches/grid-overlay-plan.md`` §3.2.
     A later in-place edit does not reach the copy, so an author re-registers the
     node (``removeOverlay`` then ``addOverlay``) after changing it.
+
+    ``role`` is the provider feature the scene belongs to. A mod need not pass it:
+    the facade supplies the feature while a provider callback registers the scene,
+    which is what lets the shell replay the grid on the hovered face's candidate
+    plane with the same shader. A scene registered outside a callback keeps the
+    role it already has (or none), so a settings refresh cannot erase it.
     """
-    return _coin_module().addOverlay(node)
+    if role is None:
+        role = _PROVIDER_ACTIVATING
+    if role is None:
+        # A plain overlay (a document's scene graph, a one-off node): the bridge's
+        # original one-argument call, which a coin shim without the role still accepts.
+        return _coin_module().addOverlay(node)
+    return _coin_module().addOverlay(node, role)
 
 
 def removeOverlay(node) -> bool:

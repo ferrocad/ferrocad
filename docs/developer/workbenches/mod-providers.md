@@ -181,6 +181,22 @@ dropped for that event; it cannot prevent the document from closing or the other
 observers from running. Provider callbacks keep their own once-per
 `(feature, backend, hook)` reporting.
 
+## The overlay a provider registers
+
+A backend that draws through `FerroCADGui.addOverlay` registers its scene **while
+its callback runs**, and the facade tags that scene with the feature. The tag does
+not change the mod's API and does not cross into the scene: it is registry
+metadata the host reads. It buys two things the host cannot otherwise know:
+
+- The grid overlay is the one the viewport **replays on a candidate plane** (the
+  face a click would bind), in a second `ViewSpec` carrying that plane in the
+  `Frame` uniform. The preview therefore uses the provider's own shader, and a
+  click changes no renderer. A scene registered outside a callback carries no
+  feature: it draws on the active plane and is never replayed.
+- Re-registering the same node from a settings callback (the Coin mod's
+  `_rebind`) keeps the tag: it belongs to who registered the scene, not to that
+  update.
+
 ## The deactivate contract
 
 `activate` makes the backend the drawn one; `deactivate` must undo exactly that
@@ -220,7 +236,7 @@ removed. The FerroCAD-native backend is the default because it needs no Coin fac
 `Mods_Settings` (registered by `python/ferrocad_shell`) opens the ordinary dialog
 spec: one `enum` field per feature, whose options are the providers' labels and
 whose seed is the active one. Accepting calls `setActiveProvider` for every
-feature that changed and returns the merged `{"view": …}` (plus a status line),
+feature that changed and returns the merged `{"view": …}` (plus a status toast),
 which the shell already applies from a dialog. It returns a status instead when
 no provider is registered.
 

@@ -49,7 +49,12 @@ cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
 - The **six upstream knobs** and defaults: `enabled=True`, `opacity=0.65`,
   `color="#808080"`, `base_spacing=1.0`, `shadow_enabled=True`,
   `shadow_opacity=0.30`. One Coin-only knob is added: `grid_axes=True`, the
-  in-plane X/Y line switch below.
+  in-plane X/Y line switch below. On a FerroCAD build `enabled`, `color`,
+  `opacity` and the sizing rows are the **shared** `FerroCAD.Grid` knobs instead
+  (`#808080` survives only as the upstream fallback), so the theme's `GRID_INK`
+  default, a `FerroCAD.Grid.color` write and the drawn lattice are one value. A
+  private `color` left by an older install is migrated into the shared store
+  once, and only when that store has never held a colour.
 - The **command intent**: one discoverable command, no workbench activation.
   The id is `GridOverlayCoin_Settings` and the menu text is
   `Grid Overlay (Coin)`.

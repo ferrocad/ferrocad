@@ -11,7 +11,7 @@ trace knobs).
 | Mode | Shows | Reproducible | Needs |
 | --- | --- | --- | --- |
 | `viewport` (default) | the 3D viewport only: tessellated shapes, camera, size, surface/edge colours | **Yes** — a spec plus the renderer gives the same PNG bytes | a wgpu adapter; no display and no window manager |
-| `chrome` | the app window: title bar, header controls, navigation cube, action dock, status line, and with `--dev-tools` the Dev Tools window beside it | Mostly — the app is launched fresh, but the desktop's window manager can add its own frame | an X display (or Xvfb); X11 capture |
+| `chrome` | the app window: title bar, header controls, navigation cube, action dock, and with `--dev-tools` the Dev Tools window beside it | Mostly — the app is launched fresh, but the desktop's window manager can add its own frame | an X display (or Xvfb); X11 capture |
 | `desktop` | the whole display, or a `--region` of it: the app plus the desktop and any other windows | No — it captures the live session | an X display with root capture; X11/Xvfb, not a Wayland-only session |
 
 Use `viewport` for anything that should be reviewable in CI: it is a small JSON
@@ -236,7 +236,7 @@ desktop gestures and writes `ui-<section>.gif`:
 | --- | --- |
 | `tools` | click a body, then `1` (Move/Rotate), `2`, `3`, `0`; each hand re-picks its target |
 | `pick` | Inspect with the `Body \| Face \| Edge` filter, clicking each scope |
-| `create` | click `Create Box` in the action bar; the status line reports `created Box001` |
+| `create` | click `Create Box` in the action bar; the action toast reports `created Box001` |
 | `pending` | drag the Move X arrow, hold the pending row and ✓/✗, then `Esc` rolls back |
 | `move` | select the filleted body, drag the X arrow, release, then ✓; the feature keeps the accepted placement |
 | `move-web` | the same pending Move and ✓ accept gesture in the browser, through CDP |

@@ -176,7 +176,7 @@ fn an_overlay_subtree_is_pulled_and_compiles_as_lines() {
             .expect("run overlay script");
         let root = globals.get_item("root").expect("get_item").expect("root");
 
-        ferrocad_inventor_py::add_overlay(&root).expect("register the overlay");
+        ferrocad_inventor_py::add_overlay(&root, None).expect("register the overlay");
         assert!(
             ferrocad_inventor::overlays::dirty(),
             "registering marks the pull channel dirty"

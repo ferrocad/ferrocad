@@ -2850,6 +2850,7 @@ dependencies = [
  "ferrocad_inventor",
  "ferrocad_shell_api",
  "ferrocad_stage",
+ "ferrocad_theme",
  "log",
  "serde_json",
 ]

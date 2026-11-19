@@ -1,8 +1,10 @@
 # The viewport toolbar
 
-The environment controls are a compact, translucent pill floating in the **top-left** of
-the canvas. It is not a pane header: the scene reaches the title bar, and the pill
-occludes only itself, so a press on the canvas beside it still orbits or selects.
+The environment controls are a compact row floating in the **top-left** of the canvas,
+and each control is its own **semi-transparent pill**. The row itself paints no background,
+so it is not a pane header: the scene reaches the title bar, and a pill's own glass keeps
+it legible over the canvas. The row occludes only itself, so a press on the canvas beside
+it still orbits or selects.
 
 <div class="fc-tabs" data-fc-tabs>
 <div class="fc-tabs__bar" role="tablist" aria-label="Which host draws the figure">
@@ -12,12 +14,12 @@ occludes only itself, so a press on the canvas beside it still orbits or selects
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-toolbar-desktop-window.png" alt="The viewport toolbar highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-toolbar-desktop.png" alt="Close-up of the viewport toolbar">
-<figcaption><strong>Desktop</strong> — the pill in reading order: Grid, Axes, WP, Gizmo, Select and Snap. A label runs the primary command; its caret opens the popover.</figcaption>
+<figcaption><strong>Desktop</strong> — the row in reading order: Grid, Axes, WP, Gizmo, Select and Snap. A label runs the primary command; its caret opens the popover.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-toolbar-web-window.png" alt="The viewport toolbar highlighted in the browser build">
 <img class="fc-tabs__closeup" src="../images/ui-toolbar-web.png" alt="Close-up of the viewport toolbar in the browser build">
-<figcaption><strong>Web</strong> — the same pill and the same order in the browser build, with the inspector column beside the canvas. The labels, carets and popovers are the shared shell controls.</figcaption>
+<figcaption><strong>Web</strong> — the same row and the same order in the browser build, with the inspector column beside the canvas. The labels, carets and popovers are the shared shell controls.</figcaption>
 </figure>
 </div>
 
@@ -74,7 +76,7 @@ menu.
 ## What a popover contains
 
 The popovers are not modal. They have no backdrop and do not swallow a click on the
-canvas; the pill they hang from occludes, so pressing the glass does not start an orbit.
+canvas; the control itself occludes, so pressing it does not start an orbit.
 `Esc`, a click elsewhere, or choosing a one-shot action closes the popover.
 
 Rows come in two kinds:

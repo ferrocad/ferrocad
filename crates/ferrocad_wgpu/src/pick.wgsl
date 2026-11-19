@@ -6,7 +6,9 @@ struct Globals {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     color: vec4<f32>,
-    // Declared to match the scene shader's uniform layout; picking ignores both.
+    // Declared to match the scene shader's uniform layout; picking ignores both. The
+    // scene shader appends a `viewport` row for its point sprites, which picking has no
+    // use for and does not declare.
     shade: vec4<f32>,
     pick: u32,
     topology: u32,

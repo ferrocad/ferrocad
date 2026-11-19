@@ -43,6 +43,9 @@ LEGACY_GRID_PREFERENCES = "User parameter:BaseApp/Preferences/Mods/grid/ferrocad
 LEGACY_PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
 DEFAULT_ENABLED = True
+#: The axis default inks: the Python mirrors of `ferrocad_theme::draw::AXIS_X/Y/Z`
+#: (`ui::AXIS_X/Y/Z` for chrome), pinned by `tests/test_axis_settings.py`. A stored
+#: `FerroCAD.Axis.color_*` wins.
 DEFAULT_COLOR_X = "#f87171"
 DEFAULT_COLOR_Y = "#4ade80"
 DEFAULT_COLOR_Z = "#38bdf8"

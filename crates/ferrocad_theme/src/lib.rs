@@ -54,6 +54,13 @@ mod tests {
             (draw::GLASS_TOP, 0x555c67),
             (draw::EDGE_FRONT, 0xd6e0f0),
             (draw::EDGE_OCCLUDED, 0xd6e0f0),
+            (draw::GRID_INK, 0x94a3b8),
+            (draw::AXIS_X, 0xf87171),
+            (draw::AXIS_Y, 0x4ade80),
+            (draw::AXIS_Z, 0x38bdf8),
+            (draw::PREVIEW_INK, 0xa78bfa),
+            (draw::ADDITIVE_INK, 0xf59e0b),
+            (draw::SUBTRACTIVE_INK, 0xef4444),
         ] {
             assert_eq!(srgb_hex_from_linear(linear), hex);
             let back = linear_from_srgb_hex(hex);
@@ -102,5 +109,20 @@ mod tests {
         let glass = linear_from_srgb_hex((ui::GLASS & 0xffffff00) >> 8);
         close(glass, draw::GLASS_SHADE);
         assert_eq!(srgb_hex_from_linear(draw::GLASS_SHADE), 0x151a24);
+
+        // The operation accent and the preview ink are now tokens on both sides, so the
+        // ghost, the widget and the stem cannot drift apart again.
+        for (linear, hex) in [
+            (draw::GRID_INK, ui::GRID_INK),
+            (draw::AXIS_X, ui::AXIS_X),
+            (draw::AXIS_Y, ui::AXIS_Y),
+            (draw::AXIS_Z, ui::AXIS_Z),
+            (draw::PREVIEW_INK, ui::PREVIEW_INK),
+            (draw::ADDITIVE_INK, ui::PUSH_PULL_COLOR),
+            (draw::SUBTRACTIVE_INK, ui::SUBTRACT_COLOR),
+        ] {
+            close(linear, linear_from_srgb_hex(hex));
+            assert_eq!(srgb_hex_from_linear(linear), hex);
+        }
     }
 }

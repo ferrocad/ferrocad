@@ -34,7 +34,7 @@ impl Shell {
     ) -> bool {
         if self.modal_open() {
             let status = "a dialog is already open".to_string();
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return false;
@@ -54,7 +54,7 @@ impl Shell {
         self.form_result = None;
         self.focus_form = true;
         let status = format!("form {opened}: open");
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
         true
@@ -123,7 +123,7 @@ impl Shell {
             Some(FormResult::Rejected) => format!("form {name}: rejected"),
             None => format!("form {name}: closed"),
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }

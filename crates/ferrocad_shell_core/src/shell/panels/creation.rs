@@ -34,11 +34,10 @@ use crate::shell::*;
 pub(crate) const CREATION_SLOTS: usize = 5;
 /// The key labels, by pill position.
 ///
-/// The two hands share one digit space: `0`–`3` equip the Modify hand's slots
+/// The two hands share one contiguous digit space: `1`–`4` equip the Modify hand's slots
 /// (`Slot::from_key`) and `5`–`9` arm the Add hand's pills, so the create dock is a
-/// loadout in exactly the sense the bottom-left bar is. `4` is deliberately unbound —
-/// it is the one digit between the two runs, and the shell leaves it to whatever owns
-/// the canvas rather than inventing a meaning for it.
+/// loadout in exactly the sense the bottom-left bar is. The row reads left to right as
+/// `1 2 3 4 5 6 7 8 9`; nothing sits outside the run.
 pub(crate) const CREATION_KEYS: [&str; CREATION_SLOTS] = ["5", "6", "7", "8", "9"];
 
 /// The Add hand's state: which tool each category remembers, the last tool armed, and the
@@ -50,7 +49,7 @@ pub(crate) struct CreationDock {
     /// The tool last armed overall: the pill's accent, `PILL_HOLD`, and the key re-press
     /// (a second press steps the slot instead of re-arming it).
     active: Option<String>,
-    /// The flyout's category tab while it is open.
+    /// The category the flyout is open on, while it is open.
     tab: Option<String>,
 }
 
@@ -75,7 +74,7 @@ impl CreationDock {
         self.active.as_deref()
     }
 
-    /// The flyout's open tab.
+    /// The category the flyout is open on.
     pub(crate) fn tab(&self) -> Option<&str> {
         self.tab.as_deref()
     }
@@ -91,15 +90,7 @@ impl CreationDock {
         self.active = Some(id.to_string());
     }
 
-    /// Point a category at `id` without arming it (a tab click).
-    ///
-    /// The active tool is the tool that is **running**; browsing a category must not
-    /// claim one, so `active` is left alone and only the category's memory moves.
-    pub(crate) fn point(&mut self, category: &str, id: &str) {
-        self.memory.insert(category.to_string(), id.to_string());
-    }
-
-    /// Open the flyout on `category`.
+    /// Open the flyout on `category` (the caret of that category's pill).
     pub(crate) fn open_tab(&mut self, category: &str) {
         self.tab = Some(category.to_string());
     }
@@ -280,38 +271,6 @@ impl Shell {
         }
     }
 
-    /// Click a category tab: show that category's tools, and point its pill at the tool
-    /// the category remembers.
-    ///
-    /// The pill behind the flyout therefore already names what the next click would arm,
-    /// which is what makes browsing a category feel like loading the strip.
-    pub(crate) fn set_creation_tab(&mut self, category: &str, cx: &mut Context<Self>) {
-        self.creation.open_tab(category);
-        let tool = {
-            let model = self.model.lock().unwrap();
-            let surfaces = model.surfaces();
-            let mut tools = surfaces
-                .creation
-                .iter()
-                .copied()
-                .filter(|command| !command.dev_only)
-                .filter(|command| {
-                    command
-                        .category()
-                        .is_some_and(|name| name.eq_ignore_ascii_case(category))
-                });
-            self.creation
-                .memory(category)
-                .and_then(|id| tools.clone().find(|command| command.id == id))
-                .or_else(|| tools.next())
-                .map(|command| command.id.clone())
-        };
-        if let Some(id) = tool {
-            self.creation.point(category, &id);
-        }
-        cx.notify();
-    }
-
     /// Every tool of one creation category, in the order the flyout lists them.
     ///
     /// The key path steps through this list (`5` → the next Sketch tool), so it is the
@@ -395,21 +354,22 @@ mod tests {
         assert_eq!(dock.active(), Some("SimpleCAD_Loft"));
     }
 
+    /// Opening a category's flyout browses it: the panel is told which list to show and
+    /// nothing is armed, so the tool that is running keeps running.
     #[test]
-    fn a_tab_click_points_the_pill_without_arming_anything() {
+    fn opening_a_flyout_browses_without_arming_anything() {
         let mut dock = CreationDock::default();
         dock.remember("Part_Box", Some("Solid"));
         dock.open_tab("Surface");
-        dock.point("Surface", "SimpleCAD_Loft");
         assert_eq!(dock.tab(), Some("Surface"));
-        assert_eq!(dock.memory("Surface"), Some("SimpleCAD_Loft"));
-        assert_eq!(dock.active(), Some("Part_Box"), "browsing arms nothing");
+        assert_eq!(dock.memory("Surface"), None, "browsing arms nothing");
+        assert_eq!(dock.active(), Some("Part_Box"), "and the running tool stays");
 
         dock.close_tab();
         assert_eq!(dock.tab(), None);
     }
 
-    /// The Add hand's keys continue the Modify hand's: the loadout bar owns `0`–`3`, so
+    /// The Add hand's keys continue the Modify hand's: the loadout bar owns `1`–`4`, so
     /// the pills start at `5` and neither hand can shadow the other's digits.
     #[test]
     fn the_pill_keys_continue_past_the_modify_hand() {
@@ -421,9 +381,14 @@ mod tests {
                 "`{key}` arms a create pill, not a Modify slot"
             );
         }
+        assert_eq!(
+            Slot::from_key("4"),
+            Some(crate::shell::Slot::Inspect),
+            "the Modify run ends at 4, so the digits have no gap"
+        );
         assert!(
-            Slot::from_key("4").is_none(),
-            "`4` is the gap between the two runs and stays unbound"
+            Slot::from_key("0").is_none(),
+            "the number row starts at one"
         );
     }
 }

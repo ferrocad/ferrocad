@@ -82,6 +82,7 @@ impl State {
             depth: self.depth,
             pickable: self.pickable,
             ribbon: false,
+            sprite: false,
             program: self.program.clone(),
         }
     }

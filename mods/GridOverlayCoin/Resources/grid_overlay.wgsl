@@ -91,7 +91,7 @@ struct Program {
 @group(2) @binding(0) var<uniform> frame: Frame;
 @group(2) @binding(1) var<uniform> program: Program;
 
-const DEPTH_BIAS: f32 = 1e-6; // push the grid slightly back so coplanar faces win
+const DEPTH_BIAS: f32 = 1e-5; // NDC pull towards the camera; see `output.depth`
 // The fraction of a patch's radius that stays at full alpha; beyond it the grid fades
 // to nothing at the radius. Matches `ferrocad_stage::grid::FADE_START`.
 const PATCH_FADE_START: f32 = 0.55;
@@ -144,17 +144,37 @@ fn ink_for(host: f32, fallback: f32) -> f32 {
     return select(fallback, host, host > 0.0);
 }
 
+// Distance from `c` to the nearest lattice line, in **pixels**. `d` is cells per pixel
+// for this axis, so zero means the fragment sits on a line.
+fn lattice_px(c: f32, d: f32) -> f32 {
+    return abs(fract(c - 0.5) - 0.5) / max(d, 1e-12);
+}
+
 // Coverage of a line at integer values of c. `d` is cells per pixel for this axis, `step`
 // the level's world step and `width` the stroke's width in world units (0 = 1 px).
 fn line_cov(c: f32, d: f32, step: f32, width: f32) -> f32 {
     let cells = max(d, 1e-12);
-    let dist_px = abs(fract(c - 0.5) - 0.5) / cells;
+    let dist_px = lattice_px(c, d);
     // The stroke is measured in the plane's units, exactly like the native quads, then
     // converted to pixels on this axis so its edge can be feathered over one pixel.
     let half_px = max(0.5, 0.5 * width / (cells * step));
     let cov = 1.0 - clamp(dist_px - (half_px - 0.5), 0.0, 1.0);
     // Fade out when cells get too dense to resolve (kills moire).
     return cov * (1.0 - smoothstep(0.25, 0.5, cells));
+}
+
+// Coverage of a **dot**: a disc of `radius_px` around the intersection.
+//
+// A dot is one mark, and the product of the two line coverages is not it: each hairline
+// profile is zero by 1 px from its line, so the product peaked near a quarter on the nearest
+// pixel centre and the field read as nothing beside lines carrying the same ink. A disc
+// with a one-pixel feathered edge gives the pixel the mark lands in its full coverage at
+// any radius, and reads as a dot rather than a square once the mark is wider than a pixel.
+fn dot_cov(du_px: f32, dv_px: f32, radius_px: f32) -> f32 {
+    // Never smaller than a pixel's radius: a sub-pixel disc would feather itself away, and a
+    // host that sends no width at all (a screen-space dot) means exactly this mark.
+    let r = max(radius_px, 1.0);
+    return 1.0 - smoothstep(r - 0.5, r + 0.5, length(vec2<f32>(du_px, dv_px)));
 }
 
 // The grid's coverage in the plane's frame: the minor level (intersection **dots**, or a
@@ -164,7 +184,8 @@ fn line_cov(c: f32, d: f32, step: f32, width: f32) -> f32 {
 // The reference shader drew a line lattice at every level it picked. With the host's
 // steps that means a line mesh at the minor step, which on a small face patch is ~10x
 // the native grid's fragments (and reads as a dense cage). Drawing the minor level as
-// dots keeps the two backends identical: the product of both axes' coverage is a dot.
+// dots keeps the two backends identical: one mark per intersection, the same size and
+// ink as the native point.
 fn grid_alpha(pu: f32, pv: f32, dwu: f32, dwv: f32) -> f32 {
     var minor_step = frame.workplane_steps.x;
     var major_step = frame.workplane_steps.y;
@@ -180,11 +201,23 @@ fn grid_alpha(pu: f32, pv: f32, dwu: f32, dwv: f32) -> f32 {
     let major_ink = ink_for(frame.workplane_steps.w, program.values.z);
     let minor_u = line_cov(pu / minor_step, dwu / minor_step, minor_step, minor_width);
     let minor_v = line_cov(pv / minor_step, dwv / minor_step, minor_step, minor_width);
-    // Dots at the minor intersections (both axes on a line at once), or the lattice the
-    // user asked for (`minor_style: lines`).
-    var minor = minor_u * minor_v;
+    // Dots at the minor intersections, or the lattice the user asked for
+    // (`minor_style: lines`).
+    //
+    // The host sends the dot's **diameter** in world units; `0` means a screen-space dot,
+    // which is what the viewport sends. `plane_px` converts it to device pixels here, per
+    // fragment, so a tilted plane's foreshortening cannot shrink or swell the mark, and the
+    // floor in `dot_cov` gives that screen-space dot two pixels across.
+    let plane_px = max(0.5 * (dwu + dwv), 1e-12);
+    let dot_radius_px = 0.5 * minor_width / plane_px;
+    var minor = 0.0;
     if (frame.grid_stroke.x > 0.5) {
         minor = max(minor_u, minor_v);
+    } else {
+        let dense = 1.0 - smoothstep(0.25, 0.5, max(dwu / minor_step, dwv / minor_step));
+        let du = lattice_px(pu / minor_step, dwu / minor_step);
+        let dv = lattice_px(pv / minor_step, dwv / minor_step);
+        minor = dot_cov(du, dv, dot_radius_px) * dense;
     }
     let dots = minor * minor_ink;
     // Lines at the major step, along either axis.
@@ -325,6 +358,13 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     // GLSL needs it because GL's clip z is [-1, 1]). Clamp instead of clip: a grid
     // outside the near/far range still draws, pinned to the depth limits so model
     // geometry keeps occluding it.
-    output.depth = clamp(clip.z / clip.w + DEPTH_BIAS, 0.0, 0.999999);
+    //
+    // The bias is **subtracted**: a workplane bound to a face draws its grid *on* that
+    // face, and `scene.wgsl` defines a positive bias as "towards the camera". Adding it
+    // here pushed the patch behind the very face it was bound to, so the grid only
+    // survived outside the silhouette and washed out to nothing across the face. The
+    // value mirrors `WIRE_DEPTH_BIAS` (`ferrocad_stage::shape`), the bias the native
+    // grid draws with; the surface pipeline already pushes shaded faces the other way.
+    output.depth = clamp(clip.z / clip.w - DEPTH_BIAS, 0.0, 0.999999);
     return output;
 }

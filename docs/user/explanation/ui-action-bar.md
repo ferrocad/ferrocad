@@ -1,9 +1,12 @@
-# The globals dock
+# The globals: document actions, Search and Fit
 
-The `dock` surface is the **vertical pill on the left edge** of the canvas: `Undo`, `Redo`,
-`Fit` and Search. It carries the commands that act on the whole document; the verbs that
-depend on what is under the pointer live in the wheel menu, and the two hands' tools live in
-the bottom row. That split is why the dock never changes width when the selection changes.
+The `dock` globals are no longer one column. Each one sits where the thing it acts on
+lives: **Undo**, **Redo** and **Save** are document operations, so they sit in the window
+title bar beside the document's name; **Fit** is a view operation, so it sits beside the
+navigation cube; **Search** is the entry point to every command, so it is a pill centred
+in the title bar. The verbs that depend on what is under the pointer live in the
+wheel menu, and the two hands' tools live in the bottom row. That split is why none of
+these controls ever grows a list of tools.
 
 <div class="fc-tabs" data-fc-tabs>
 <div class="fc-tabs__bar" role="tablist" aria-label="Which host draws the figure">
@@ -11,35 +14,37 @@ the bottom row. That split is why the dock never changes width when the selectio
 <button class="fc-tabs__tab" data-fc-tab="web" type="button" role="tab" aria-selected="false">Web</button>
 </div>
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
-<img src="../images/ui-action-bar-desktop-window.png" alt="The globals dock highlighted in the desktop application window">
-<img class="fc-tabs__closeup" src="../images/ui-action-bar-desktop.png" alt="Close-up of the globals dock">
-<figcaption><strong>Desktop</strong> — the left-edge column: Undo, Redo, Fit, then Search. The bottom row below it belongs to the two hands.</figcaption>
+<img src="../images/ui-action-bar-desktop-window.png" alt="The document actions highlighted in the desktop title bar">
+<img class="fc-tabs__closeup" src="../images/ui-action-bar-desktop.png" alt="Close-up of the document actions in the title bar">
+<figcaption><strong>Desktop</strong> — Undo, Redo and Save sit beside the document's name in the title bar. Fit is in the navigation cube's control bar at the top-right, and Search is centred over the canvas. The bottom row belongs to the two hands.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
-<img src="../images/ui-action-bar-web-window.png" alt="The globals dock highlighted in the browser build">
-<img class="fc-tabs__closeup" src="../images/ui-action-bar-web.png" alt="Close-up of the globals dock in the browser build">
-<figcaption><strong>Web</strong> — the same column in the browser build, with Undo, Redo, Fit and Search. The registry decides the buttons; the shell does not name a workbench.</figcaption>
+<img src="../images/ui-action-bar-web-window.png" alt="The document actions highlighted in the browser build">
+<img class="fc-tabs__closeup" src="../images/ui-action-bar-web.png" alt="Close-up of the document actions in the browser build">
+<figcaption><strong>Web</strong> — the same split in the browser build: document actions by the title, Fit by the navigation cube, Search centred in the title bar. The registry decides the buttons; the shell does not name a workbench.</figcaption>
 </figure>
 </div>
 
-## What is on it
+## What is where
 
-The dock is a column of command buttons, a hairline, and **Search (Ctrl+K)**:
+- **Title bar:** `Undo` and `Redo` are icon-only, and `Save` completes the document group.
+  Each shows a curated glyph and names itself (with its shortcut) in a tooltip; the history
+  verbs also name the top of their stack, so hovering `↶` reads `Undo: Move 1 object
+  (Ctrl+Z)`. A disabled command is muted and does not respond. While a transform is pending
+  the group dims and drops its clicks, exactly as the old card did.
+- **Navigation cube:** `Fit` frames the whole stage, beside the projection toggle, `Home`
+  and the viewpoint angles. It is a view verb, so it lives with the other view controls.
+- **Title bar, centred:** **Search** opens the command palette. `Ctrl+K` on Windows and Linux,
+  `Cmd+K` on macOS. It is an entry point rather than a command, so it has no menu of its
+  own and stays available while a transform is pending.
 
-- Each button shows a curated glyph (when the command has one), its label, and its live
-  state.
-- A disabled command is muted and does not respond.
-- A checked or live command is drawn in accent ink. The background is reserved for an
-  additive hover; the dock is a command strip, not a checklist.
-- **Search** opens the command palette. `Ctrl+K` on Windows and Linux, `Cmd+K` on macOS.
+A command's enablement comes from `IsActive()`. The title actions rebuild when the
+document changes, so Undo or Save enables or disables without anyone telling the button
+to.
 
-A command's check state comes from `IsChecked()`; its enablement comes from
-`IsActive()`. The dock rebuilds when the selection changes, so a command enables or
-disables without anyone telling the button to.
-
-It holds the globals and nothing else: creation tools are pills in the [create
-dock](ui-tool-loadout.md) beside the Modify hand, and object verbs are wheel wedges. That is
-why it never grows when a workbench registers another tool.
+These controls hold the globals and nothing else: creation tools are pills in the [create
+dock](ui-tool-loadout.md) beside the Modify hand, and object verbs are wheel wedges. That
+is why none of them grows when a workbench registers another tool.
 
 ## While a tool is running
 
@@ -77,15 +82,16 @@ fixed menu, so a workbench's commands are searchable as soon as they are registe
 
 ## Where the buttons come from
 
-The dock renders the commands assigned to the `dock` surface, skipping diagnostics that
-are marked dev-only. A command with no `FerroCAD_Surface` lands on the dock by default,
-which is always safe; `FerroCAD_Surface: "radial"` removes it from the dock and makes it a
-wheel wedge instead, and `"creation"` makes it a pill in the create dock. See
-[Commands](../../mods/commands.md) for the surface keys and
+`Undo`, `Redo`, `Fit` and `Save` are registry commands; `Save` is a `File` command and the
+other three describe document or view state. The shell places `Undo`/`Redo`/`Save` beside
+the title and the viewport draws `Fit` in the navigation cube's bar, so the same command
+can be run from these buttons, the palette, or its shortcut. A command with no
+`FerroCAD_Surface` lands on the palette by default, which is always safe;
+`FerroCAD_Surface: "radial"` makes it a wheel wedge instead, and `"creation"` makes it a
+pill in the create dock. See [Commands](../../mods/commands.md) for the surface keys and
 [Dialogs and transactions](../../mods/commands.md#dialogs) for the return shapes a
 command can use.
 
-The dock is the place a workbench puts its **global** switches. Selection verbs belong in
-the wheel, environment state belongs in the [toolbar](ui-toolbars.md), and new geometry
-belongs to the Add hand, so the dock never has to grow just because something became
-selected.
+These are the **global** verbs. Selection verbs belong in the wheel, environment state
+belongs in the [toolbar](ui-toolbars.md), and new geometry belongs to the Add hand, so the
+chrome never has to grow just because something became selected.

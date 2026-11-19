@@ -12,7 +12,8 @@ model, §6 pass-through, §10 non-goals) and
 The creation pill and the transform loadout are **one loadout system with two hands**:
 the Modify hand (bottom-left) hosts manipulators for existing geometry, and the Add hand
 sits in the **same bottom row, right after it**, hosting authoring tools for new geometry;
-the globals (`Undo`, `Redo`, `Fit`, Search) are a column on the left edge. Both hands
+the globals (`Undo`/`Redo`/`Save`, `Fit`, Search) are split across the title bar, the
+navigation cube and the title bar. Both hands
 replace implicit inference
 with an explicit, user-chosen slot, and both bind to the same topological targets
 (Scene / Body / Face / Edge).
@@ -54,18 +55,17 @@ inventory, tool strip, tokens and slice plan are in
 The placement, idle:
 
 ```
-Left edge                                             Bottom row (Modify, then Add)
-[ Undo ]                                             [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]
-[ Redo ]                                             [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
-[ Fit  ]
-[──────]
-[ 🔍 Search (Ctrl+K) ]
+Header (top-left of the canvas)
+[ ↶ ↷  Fit │ 🔍 Search (Ctrl+K) │ Grid ▾  Axes ▾  WP: XY ▾  Gizmo ▾  Select: Body ▾  Snap ▾ ]
+
+Bottom row (Modify, then Add)
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]  [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
 ```
 
 The Add hand is the **continuation of the action loadout**, in the same row: the bar's four
 slots and then one pill per category. Nothing folds it away — there is no create-dock
-toggle, and the globals dock holds only `Undo`/`Redo`/`Fit`/Search, so it never gains a
-list of tools. Each pill reads
+toggle, and the globals hold only `Undo`/`Redo`/`Save`/`Fit`/Search, so it never
+gains a list of tools. Each pill reads
 `<key> ⊕ <Category>: <Tool> ▾` and remembers its category's tool; its left half is the
 **slot**, the same gesture as its key. The keys are the **one digit space both hands
 share**: `0`–`3` equip the Modify hand's slots and `5`–`9` are the Add hand's pills at
@@ -79,9 +79,10 @@ selection cannot use. That is Slot 1's `1` Move ⇄ Rotate shape applied to a ca
 tools, and it is why the key never opens a menu: browsing a list is what the slot exists
 to save.
 
-The flyout (`▾`) shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
-…`, empty categories omitted); picking a tool binds it to its pill and runs it, and
-clicking a tab only points the pill at that category's remembered tool. Holding `Shift`
+The flyout (`▾`) is the pill's **own** category, opened without a header (2026-11-19: the
+segmented `Sketch | Solid | Surface | …` tab bar is gone — the pills in the row already
+name the categories, so browsing one is its caret, or the wheel's `Create ▸`); picking a
+tool binds it to its pill and runs it. Holding `Shift`
 **peeks** it: the equipped pill's list appears while the key is down and goes away when it
 is released, which is the keyboard's hover over the slot — and it keeps working while a
 fieldless drawing tool is armed, because hopping pills mid-session is the point of a
@@ -107,12 +108,16 @@ The placement, ARMED (the completion row joins the bottom-left column once the t
 begun; nothing is swapped and the canvas rectangle does not move):
 
 ```
-Left edge                    Bottom-left column
-[ Undo ]                     [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]   ← the tool's row
-[ Redo ]                     [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
-[ Fit  ]
-[──────]
-[ 🔍 Search (Ctrl+K) ]
+Title bar
+[ ☰  FerroCAD — Sample   ↶ ↷ Save ]      [ 🔍 Search (Ctrl+K) ]      [ – □ ✕ ]
+
+Canvas top-left (transparent)                                        Top-right
+[ Grid ▾ Axes ▾ WP: XY ▾ Gizmo ▾ Select: Body ▾ Snap ▾ ]   [ navicube + Fit ]
+
+Bottom-left column
+[ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ hint ]   ← the tool's row
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
+              ✗│✓  ← floats by the box's corner
 ```
 
 **Mutual exclusion.** The two hands are exclusive only through the existing context:
@@ -121,8 +126,8 @@ Left edge                    Bottom-left column
   (`Δ ≠ 0`, the `✗`/`✓` pair on screen), the gate already refuses `StartTool`,
   `SwitchHand`, `SwitchScope`, `Select` and editing commands; only the completion keys,
   field editing and `CmdType: ForView` commands pass. A creation tool therefore cannot
-  arm. The loadout bar, the create dock and the globals dock all dim to 45 % and drop
-  clicks.
+  arm. The loadout bar, the create dock and the title-bar document actions all dim to
+  45 % and drop clicks.
 - **Armed Add suspends Modify.** `Shell::start_tool` already closes the Move form, clears
   `set_manipulators([])` and `set_gizmo(None)`, and sets the tool; `hover_arm_allowed`
   requires `active_tool.is_none()`; the right-press radial is not opened while a tool is
@@ -197,7 +202,7 @@ in [`creation-loadout.md`](creation-loadout.md) §2.
 
 `InteractionContext::{PendingMove, PendingRotation, PendingInteraction}` allow only
 view-only commands and the completion keys. `StartTool`, `SwitchHand`, `SwitchScope`,
-`Select`, `Arm` and editing commands are refused with a status line that names the finish
+`Select`, `Arm` and editing commands are refused with a status toast that names the finish
 pair. Creation arms through the same gate; there is no second "creation lock" flag.
 
 The `Tool` context allows everything at the gate because tool input is routed elsewhere,
@@ -226,8 +231,8 @@ priority tier is needed (see [`creation-loadout.md`](creation-loadout.md) §6.1)
 | Piece | Today | This slice |
 | --- | --- | --- |
 | Modify hand | `[1 Move][2 Push/Pull][3 Fillet][0 Inspect]` in `chrome::loadout_bar`, bottom-left 16 px; the slot's default filter is `Move`/`Inspect` → Body, `PushPull` → Face, `Fillet` → Edge | unchanged |
-| Add hand | the dock is a registry command strip; the only creation affordances are commands: `Part_Box` creates 20×20×20 immediately, `Toy_MakeSlab` opens a **modal** three-field form, `Toy_Polyline` starts a tool whose strip is label/points/hint/Cancel/Finish. **2026-11-15:** the dock is `[globals │ ⊕ <LastTool> ▾ │ Search]`, the pill's flyout lists the `creation` commands by `FerroCAD_Category` with an unmet `FerroCAD_Gate` greyed in `INACTIVE_STRUCTURAL`, and an armed Box shows its `W/L/H` strip (`Tab`, typed digits, `Enter` commits) | [`creation-loadout.md`](creation-loadout.md) |
-| Pending lock | `InteractionContext::{PendingMove, PendingRotation, PendingInteraction}` allow only view-only commands and the finish keys; `StartTool`, `SwitchHand`, `SwitchScope`, `Select` and edits are refused with a status line | keep; creation arms through the same gate |
+| Add hand | the dock is a registry command strip; the only creation affordances are commands: `Part_Box` creates 20×20×20 immediately, `Toy_MakeSlab` opens a **modal** three-field form, `Toy_Polyline` starts a tool whose strip is label/points/hint and whose `✗`/`✓` pair floats beside the work. **2026-11-15:** the dock is `[globals │ ⊕ <LastTool> ▾ │ Search]`, the pill's flyout lists the `creation` commands by `FerroCAD_Category` with an unmet `FerroCAD_Gate` greyed in `INACTIVE_STRUCTURAL`, and an armed Box shows its `W/L/H` strip (`Tab`, typed digits, `Enter` commits). **2026-11-19:** the strip carries no buttons; the pair is the shared decision pill (`render::tool_finish_overlay`) | [`creation-loadout.md`](creation-loadout.md) |
+| Pending lock | `InteractionContext::{PendingMove, PendingRotation, PendingInteraction}` allow only view-only commands and the finish keys; `StartTool`, `SwitchHand`, `SwitchScope`, `Select` and edits are refused with a status toast | keep; creation arms through the same gate |
 | Bar dim | `loadout_bar(blocked)` dims to 0.45 and drops clicks; `action_dock` takes no `blocked` and stays lit | **done 2026-11-15:** `action_dock(blocked)` dims the same way while a transform or manipulator is pending, and the hand column dims while a creation tool is armed |
 | Tool owns canvas | `start_tool` gates, closes the Move form, clears manipulators + gizmo, installs the tool, keeps the slot; the radial and hover-to-arm are already suppressed | already "Armed Add suspends Modify" |
 | Hit priority | navicube → manipulators → gizmo → tool → scene | with the set empty, the tool is already directly behind the cube |
@@ -308,8 +313,9 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
   manipulators and the Move form; the radial does not open while the tool runs.
 - **Chrome.** Armed, the tool's completion row joins the bottom-left column above the
   hands' bar — and only once the tool has begun, so a hovered or freshly armed tool shows
-  nothing but its ghost — and the viewport rect is identical before and after; the bottom
-  row and the globals column
+  nothing but its ghost — with the `✗`/`✓` decision pill floating beside the shape at the
+  tool's own anchor, and the viewport rect is identical before and after; the bottom
+  row and the globals split
   keep their places; every hand surface dims only while pending (and, if decided, while
   armed).
 - **Naming.** `PILL_HOLD` leaves nothing pending and gates no action; `SESSION_HOLD` keeps

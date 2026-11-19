@@ -173,7 +173,7 @@ deleted = json.loads(ferrocad_shell.run_command("App_Delete"))
 
 | Read back | Value |
 | --- | --- |
-| Delete response | {"ok": true, "status": "deleted 1 object(s)"} |
+| Delete response | {"error": "ReferenceError: Cannot access attribute 'Label' of deleted object", "ok": false} |
 | Objects | ["Params", "Derived", "Group", "Box", "Fillet", "Slab001"] |
 
 > Every call above is a plain function on the shell's Python module. The same functions are what the window calls while you click, which is why these pages run with no window at all.

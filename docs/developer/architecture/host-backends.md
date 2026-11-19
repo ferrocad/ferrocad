@@ -749,7 +749,7 @@ same guard for gpui/pyo3/wasm-bindgen.
 **Dialogs.** GPUI ships `prompt_for_paths`/`prompt_for_new_path`, backed by
 xdg-desktop-portal on Linux and `Unsupported` on the web. `PathPromptOptions` has no
 extension filters, so the shell validates the suffix after the pick, and a missing portal
-is reported as a status line rather than an error.
+is reported as a status toast rather than an error.
 
 **The web has no synchronous readback.** The wgpu presenter answers
 `supports_pick() == true` on native and picks from an id buffer; on wasm it reports

@@ -116,7 +116,7 @@ impl Shell {
         };
         if !enabled {
             let status = format!("{id}: disabled");
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;

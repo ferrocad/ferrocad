@@ -144,6 +144,38 @@ mod tests {
             .unwrap_or_else(|| panic!("no struct {name} in the module"))
     }
 
+    /// The grid sits **on** the plane it is bound to, and `scene.wgsl`'s contract is
+    /// that a positive `depth_bias` pulls a fragment toward the camera
+    /// (`clip.z -= bias * clip.w`). This shader decides its own depth, so the sign lives
+    /// in the WGSL: adding the bias instead of subtracting it pushes the patch behind the
+    /// face it is drawing on — the grid then survives only outside the silhouette and
+    /// washes out across the face.
+    ///
+    /// The magnitude mirrors `WIRE_DEPTH_BIAS` (`ferrocad_stage::scene::shape`), which is
+    /// the bias the native workplane grid draws with, so switching backends does not move
+    /// the grid in depth.
+    #[test]
+    fn the_grid_pulls_its_depth_towards_the_camera() {
+        let Some(source) = grid_overlay_source() else {
+            return;
+        };
+        let declared = source
+            .split("const DEPTH_BIAS: f32 = ")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("the shader declares DEPTH_BIAS");
+        assert_eq!(
+            declared.trim(),
+            "1e-5",
+            "the shader's bias must stay equal to `WIRE_DEPTH_BIAS`"
+        );
+        assert!(
+            source.contains("clip.z / clip.w - DEPTH_BIAS"),
+            "the bias must be subtracted: `scene.wgsl` reads a positive value as \
+             towards the camera, so adding it hides the grid inside the face"
+        );
+    }
+
     #[test]
     fn grid_overlay_has_the_expected_entry_points() {
         let Some(module) = validated_grid_overlay() else {

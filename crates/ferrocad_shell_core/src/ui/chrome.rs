@@ -1,5 +1,6 @@
-//! Viewport chrome primitives (P0.6): split buttons, anchored popovers, the floating
-//! control pill, the action dock and the Dev Tools command list.
+//! Viewport chrome primitives (P0.6): split buttons, anchored popovers, the transparent
+//! environment row, the title-bar document actions, the search pill and the Dev Tools
+//! command list.
 //!
 //! The chrome is presentation over the command registry: every control runs an id
 //! through [`Shell::run_command`](crate::shell::Shell), and every popover row is a
@@ -8,9 +9,10 @@
 //! workplane, snap) and the synthetic provider rows a Grid/Axis/Gizmo popover
 //! starts with.
 //!
-//! The app menu (`☰`) is app-level chrome, not a viewport control: the shell passes it
-//! to `window_frame_with_leading`, so it lives in the main window's title bar. It is
-//! defined here because its popover is the same primitive as the header ones.
+//! The app menu (`☰`) and the document actions (Undo/Redo/Save) are app-level chrome, not
+//! viewport controls: the shell passes them to `window_frame_with_title_controls`, so they
+//! live in the main window's title bar. They are defined here because their controls and
+//! popovers are the same primitives as the header ones.
 //!
 //! Popovers are **not** modal. They have no backdrop and no `occlude`: a click on the
 //! canvas still reaches the viewport, and `on_mouse_down_out` dismisses the popover
@@ -28,12 +30,13 @@ use std::collections::{HashMap, HashSet};
 use ferrocad_stage::{DressUpKind, GizmoMode, ToolStatus};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::icon;
-use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, MenuTab, menu_with_tabs};
+use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
 use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
-    ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS,
-    INACTIVE_STRUCTURAL, ROW_HOVER, WHEEL_GLASS,
+    CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, FIELD_BG, FIELD_FOCUS,
+    GLASS, INACTIVE_STRUCTURAL, ROW_HOVER, STATUS_ERROR, STATUS_WARNING, TOAST_BG, TOAST_HOVER_BG,
+    WHEEL_GLASS,
 };
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
@@ -346,6 +349,159 @@ pub(crate) struct WorkplaneBadge {
     pub custom: bool,
 }
 
+/// The tooltip for a title-bar document action.
+///
+/// `Undo` and `Redo` name the top of their stack — the passive memory of the last
+/// action, which is the one moment the user wants it back. Other actions keep the
+/// label and shortcut.
+fn document_action_tip<'a>(
+    id: &str,
+    label: &str,
+    accel: &str,
+    undo_label: &'a str,
+    redo_label: &'a str,
+) -> String {
+    let stack = match id {
+        "App_Undo" => undo_label,
+        "App_Redo" => redo_label,
+        _ => "",
+    };
+    match (stack.is_empty(), accel.trim().is_empty()) {
+        (true, true) => label.to_string(),
+        (false, true) => format!("{label}: {stack}"),
+        (true, false) => format!("{label} ({accel})"),
+        (false, false) => format!("{label}: {stack} ({accel})"),
+    }
+}
+
+/// The document-actions group for the window title bar: `Undo`, `Redo` and `Save`.
+///
+/// These act on the **document** named by the title, so they sit beside it rather than
+/// over the canvas. Each is icon-only (the glyphs are unambiguous), with the label and
+/// shortcut in its tooltip. `blocked` (a pending transform or manipulator) dims the
+/// group and drops its clicks, exactly as the old globals card did.
+///
+/// The group is deliberately small: `Fit` is a view verb and lives in the navicube's
+/// control bar, and everything that creates or modifies geometry has a hand of its own.
+pub(crate) fn document_controls(
+    model: &ShellModel,
+    blocked: bool,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .ml_2()
+        .when(blocked, |el| el.opacity(0.45));
+
+    for id in ["App_Undo", "App_Redo", "App_Save"] {
+        let Some(command) = commands::find(&model.commands, id) else {
+            continue;
+        };
+        let id = command.id.clone();
+        let enabled = command.enabled && !blocked;
+        let ink = if enabled { MUTED } else { 0x5e646d };
+        let mut button = div()
+            .id(SharedString::from(format!("title-{id}")))
+            .debug_selector({
+                let id = id.clone();
+                move || format!("title-{id}")
+            })
+            .px_1()
+            .py_1()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .when(enabled, |el| {
+                el.cursor_pointer()
+                    .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+            })
+            // The title bar drags the window on left press; a control must own its press.
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            });
+        if let Some(glyph) = command_glyph(command, icon::ROW, ink) {
+            button = button.child(
+                div()
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("title-{id}-icon")
+                    })
+                    .flex()
+                    .items_center()
+                    .child(glyph),
+            );
+        }
+        let tip: SharedString = document_action_tip(
+            &command.id,
+            command.label(),
+            &command.accel,
+            &model.undo_label,
+            &model.redo_label,
+        )
+        .into();
+        button = button.tooltip(move |_window, cx| {
+            cx.new(|_| CommandTooltip { text: tip.clone() }).into()
+        });
+        if enabled {
+            button = button.on_click(cx.listener(move |this, _event, _window, cx| {
+                this.run_command(&id, cx);
+            }));
+        }
+        row = row.child(button);
+    }
+    row
+}
+
+/// The command search as a pill, centred in the window title bar.
+///
+/// It is the entry point to the palette (`Ctrl+K`), not one more command: no popover,
+/// no registry row, and it stays available while a transform is pending. The fill and
+/// hairline are the environment controls' glass, so the two pill families read as one
+/// system even though they sit in different bars.
+pub(crate) fn search_pill(cx: &mut Context<Shell>) -> impl IntoElement {
+    div()
+        .id("header-search")
+        .debug_selector(|| "header-search".to_string())
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
+        .bg(rgba(GLASS))
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+        .occlude()
+        // The title bar drags the window on left press; Search must own its press.
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation()
+        })
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .debug_selector(|| "header-search-icon".to_string())
+                        .flex()
+                        .items_center()
+                        .child(
+                            icon::named("search", icon::ROW, MUTED)
+                                .unwrap_or_else(|| div().into_any_element()),
+                        ),
+                )
+                .child("Search")
+                .child(div().text_color(rgb(MUTED)).child("Ctrl+K")),
+        )
+        .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx)))
+}
+
 pub(crate) fn viewport_header(
     model: &ShellModel,
     grid: Option<&GridSummary>,
@@ -473,16 +629,15 @@ pub(crate) fn viewport_header(
         ));
     }
 
+    // The bar itself paints nothing: the environment controls float over the scene as
+    // individual semi-transparent pills. The wrapper still occludes, so a press on a
+    // control does not start an orbit.
     div()
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
         .p_1()
-        .rounded_md()
-        .bg(rgba(GLASS))
-        .border_1()
-        .border_color(rgba(CHROME_LINE))
         .text_xs()
         .text_color(rgb(MUTED))
         .occlude()
@@ -649,8 +804,11 @@ fn workplane_button(
         .flex()
         .flex_row()
         .items_center()
-        .rounded_sm()
-        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+        .rounded_md()
+        .bg(rgba(GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
+        .when(open, |el| el.border_color(rgba(0xffffff33)));
 
     control = control.child(
         div()
@@ -662,6 +820,8 @@ fn workplane_button(
             .text_color(rgb(if custom { CHROME_ACTIVE } else { FG }))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
+            // A custom plane is state worth seeing at a glance.
+            .when(custom, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(
                 div()
                     .flex()
@@ -758,8 +918,11 @@ fn select_button(
         .flex()
         .flex_row()
         .items_center()
-        .rounded_sm()
-        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+        .rounded_md()
+        .bg(rgba(GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
+        .when(open, |el| el.border_color(rgba(0xffffff33)));
 
     control = control.child(
         div()
@@ -775,6 +938,8 @@ fn select_button(
             }))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
+            // An overridden filter is state worth seeing at a glance.
+            .when(loadout.overridden(), |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(label)
             .on_mouse_down(
                 MouseButton::Left,
@@ -1038,16 +1203,24 @@ fn split_button_with_rows(
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
-    // Dielectric: the pill's glass is the surface and the glyph ink carries on/off
-    // (greyscale off, colour on). A checked control used to fill with `ACCENT`,
-    // which pulled the eye away from the model (the NaviCube bar is the reference look).
+    // Split button: the label is the switch and the caret is the menu. A checked
+    // control fills its label segment with the chrome tint and accent ink so the
+    // active state reads at a glance; the shared pill background still owns the
+    // group, so one tinted segment is enough for the eye to find (the NaviCube bar
+    // is the reference look).
+    // The toolbar row itself is transparent, so each control carries its own
+    // semi-transparent glass so it stays legible over the scene. Opening the popover
+    // brightens the hairline rather than adding a second border.
     let mut control = div()
         .relative()
         .flex()
         .flex_row()
         .items_center()
-        .rounded_sm()
-        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+        .rounded_md()
+        .bg(rgba(GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
+        .when(open, |el| el.border_color(rgba(0xffffff33)));
 
     let enabled = command.enabled;
     let glyph: Option<AnyElement> = match key {
@@ -1071,6 +1244,11 @@ fn split_button_with_rows(
         .text_color(rgb(if enabled { FG } else { MUTED }))
         .when(enabled, |el| {
             el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
+        })
+        // The high-contrast active fill: a checked toggle tints its label segment so
+        // the state is visible without opening the menu.
+        .when(enabled && command.checked, |el| {
+            el.bg(rgba(CHROME_ACTIVE_BG)).text_color(rgb(CHROME_ACTIVE))
         })
         .child(row)
         .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
@@ -1160,22 +1338,6 @@ fn popover_with_info(
     pass_through: Option<&'static str>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    popover_with_tabs(key, info, Vec::new(), rows, pass_through, cx)
-}
-
-/// [`popover_with_info`] with a segmented tab bar above its rows.
-///
-/// The tabs are how a panel presents several short lists instead of one long one (the
-/// creation flyout's categories); every other popover passes none, so its panel is the
-/// same column it always was.
-fn popover_with_tabs(
-    key: &'static str,
-    info: Vec<PopoverInfo>,
-    tabs: Vec<MenuTab>,
-    rows: Vec<PopoverRow>,
-    pass_through: Option<&'static str>,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
     let keep_open: HashSet<String> = rows
         .iter()
         .filter(|row| row.keep_open)
@@ -1218,11 +1380,6 @@ fn popover_with_tabs(
         });
     };
     let shell = cx.entity().downgrade();
-    let on_tab = move |id: &str, _event: &ClickEvent, _window: &mut Window, cx: &mut App| {
-        let id = id.to_string();
-        let _ = shell.update(cx, |shell, cx| shell.set_creation_tab(&id, cx));
-    };
-    let shell = cx.entity().downgrade();
     let on_dismiss = move |_window: &mut Window, cx: &mut App| {
         let _ = shell.update(cx, |shell, cx| {
             if let Some(overlay) = pass_through {
@@ -1232,17 +1389,7 @@ fn popover_with_tabs(
         });
     };
 
-    menu_with_tabs(key, info, tabs, rows, on_tab, on_row, on_dismiss)
-}
-
-/// The hairline that separates groups in the **vertical** globals dock.
-fn dock_rule(id: usize) -> impl IntoElement {
-    div()
-        .id(SharedString::from(format!("dock-rule-{id}")))
-        .debug_selector(move || format!("dock-rule-{id}"))
-        .h(px(1.))
-        .my_1()
-        .bg(rgba(CHROME_LINE))
+    menu(key, info, rows, on_row, on_dismiss)
 }
 
 /// The Dev Tools providers panel: one row per provider feature, with a button per
@@ -1487,56 +1634,32 @@ fn gpu_row(
     row
 }
 
-
-/// An action button's content: an embedded glyph and its word.
-fn action_label(
-    key: &'static str,
-    label: &'static str,
-    ink: u32,
-    selector: &'static str,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(
-            div()
-                .debug_selector(move || selector.to_string())
-                .flex()
-                .items_center()
-                .child(
-                    icon::named(key, icon::ROW, ink).unwrap_or_else(|| div().into_any_element()),
-                ),
-        )
-        .child(label)
-}
-
 /// Whether the armed tool has **begun** — its first click has placed the anchor (or its
 /// first point).
 ///
 /// This is the rule that keeps arming a tool quiet. Pressing a pill or a key equips the
 /// slot and lets the canvas show the placement ghost of what the next click would make;
-/// the completion row — the tool's name, its numbers and the `✗`/`✓` pair — is a response
-/// to that click, not to equipping, so it only appears once there is something to
-/// complete. Every tool reports the click through `ToolStatus::points`, including the
+/// the completion row — the tool's name, its numbers and its hint — is a response to that
+/// click, not to equipping, so it only appears once there is something to complete. Every tool reports the click through `ToolStatus::points`, including the
 /// parameter tools: `BoxTool` anchors on the press and only then offers `W`/`L`/`H`, so the
 /// numbers are typed *after* the placement rather than in front of an empty canvas.
 pub(crate) fn tool_has_begun(status: &ToolStatus) -> bool {
     status.points > 0
 }
 
-/// The armed tool's row: what is running, its numbers (or its point count), its hint and
-/// the `Cancel` / `Finish` pair — the **completion row**.
+/// The armed tool's row: what is running, its numbers (or its point count) and its hint —
+/// the **completion row**.
 ///
 /// It is the row directly above the two hands' bar, in the same bottom-left column, so a
 /// session never takes the loadout, the create dock or the globals away, and the row reads
 /// as part of the same instrument. It only exists once [`tool_has_begun`]: an armed tool
 /// that has placed nothing shows a hover ghost on the canvas and no row at all.
 ///
-/// **Cancel** is neutral (no accent fill) and ends the session through
-/// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
-/// as `Enter` ([`Shell::finish_active_tool`]), so the button and the key cannot drift.
+/// **The row holds no buttons.** Ending the session is the shared `✗`/`✓` decision pill
+/// that floats beside the work (`render::tool_finish_overlay`), exactly as the Move form
+/// splits its docked fields from its in-context pair — one finish control across Move,
+/// Modify and Create instead of a docked pair here and a floating one there. `Enter` and
+/// `Esc` still reach the same handlers.
 pub(crate) fn tool_pill(
     status: &ToolStatus,
     edit: Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
@@ -1549,18 +1672,19 @@ pub(crate) fn tool_pill(
         .flex()
         .flex_row()
         .items_center()
-        .gap_3()
+        .gap_2()
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgba(WHEEL_GLASS))
+        .bg(rgba(DOCK_BG))
         .border_1()
         .border_color(rgba(DOCK_BORDER))
         .text_xs()
         .child(div().text_color(rgb(FG)).child(status.label.clone()));
-    // The numeric row (C2): one tabular-monospace group, the fields separated by
-    // hairlines, the unit printed once at the end. It is docked with the pill, so no
-    // number follows the pointer.
+    // The numeric row (C2): the same boxed fields as the transform forms, so a creation
+    // parameter and a manipulation parameter read as one control family. The unit is
+    // printed once at the end. It is docked with the pill, so no number follows the
+    // pointer.
     if !status.fields.is_empty() {
         let mut fields = div()
             .id("tool-fields")
@@ -1568,8 +1692,7 @@ pub(crate) fn tool_pill(
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
-            .font_family("monospace");
+            .gap_2();
         let unit = status
             .fields
             .iter()
@@ -1582,7 +1705,47 @@ pub(crate) fn tool_pill(
                 .filter(|edit| edit.index == index)
                 .map(|edit| edit.text.clone())
                 .unwrap_or_else(|| field.value.clone());
-            let mut cell = div()
+            let mut field_box = div()
+                .debug_selector({
+                    let id = field.id.clone();
+                    move || format!("tool-field-{id}-box")
+                })
+                .h(px(28.))
+                .w(px(88.))
+                .flex()
+                .items_center()
+                .px_2()
+                .rounded_sm()
+                .bg(rgb(FIELD_BG))
+                .border_1()
+                .border_color(if focused {
+                    rgb(FIELD_FOCUS)
+                } else {
+                    rgba(CHROME_LINE)
+                })
+                .text_size(px(13.))
+                .text_color(rgb(FG))
+                .cursor(gpui::CursorStyle::IBeam)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                        this.focus_tool_field(index, cx);
+                    }),
+                )
+                .child(
+                    div()
+                        .debug_selector({
+                            let id = field.id.clone();
+                            move || format!("tool-field-{id}-value")
+                        })
+                        .child(value),
+                );
+            if focused {
+                // The caret carries the same electric cyan as the border ring, so the
+                // creation row reads exactly like the Move and manipulator fields.
+                field_box = field_box.child(div().text_color(rgb(FIELD_FOCUS)).child("▏"));
+            }
+            let cell = div()
                 .id(SharedString::from(format!("tool-field-{}", field.id)))
                 .debug_selector({
                     let id = field.id.clone();
@@ -1592,22 +1755,8 @@ pub(crate) fn tool_pill(
                 .flex_row()
                 .items_center()
                 .gap_1()
-                .px_1()
-                .rounded_sm()
-                .child(div().text_color(rgb(MUTED)).child(field.label.clone()))
-                .child(
-                    div()
-                        .debug_selector({
-                            let id = field.id.clone();
-                            move || format!("tool-field-{id}-value")
-                        })
-                        .text_color(rgb(if focused { ACTIVE_ACCENT } else { FG }))
-                        .child(value),
-                );
-            if focused {
-                // A caret, so "this field owns the keyboard" needs no focus ring.
-                cell = cell.child(div().text_color(rgb(ACTIVE_ACCENT)).child("▏"));
-            }
+                .child(div().text_color(rgb(FG)).child(field.label.clone()))
+                .child(field_box);
             fields = fields.child(cell);
         }
         if !unit.is_empty() {
@@ -1621,216 +1770,16 @@ pub(crate) fn tool_pill(
             if status.points == 1 { "" } else { "s" }
         )));
     }
-    // The row only exists once the tool has begun (`tool_has_begun`), so the pair is
-    // always offered here: the user has placed a point or has a parameter row to finish.
-    pill = pill.child(
+    // The row only exists once the tool has begun (`tool_has_begun`), so what is left to
+    // complete is always the session itself; the pair that ends it floats beside the work.
+    pill.child(
         div()
             .min_w_0()
             .truncate()
             .text_color(rgb(MUTED))
             .child(status.hint.clone()),
-    );
-    pill
-        // The abort action is neutral: the accent fill belongs to Finish.
-        .child(
-            div()
-                .id("tool-cancel")
-                .debug_selector(|| "tool-cancel".to_string())
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .bg(rgb(PANEL))
-                .text_color(rgb(FG))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(PANEL_ALT)))
-                .child(action_label("close", "Cancel", FG, "tool-cancel-icon"))
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.cancel_tool(cx);
-                })),
-        )
-        // Finish is a real button, not a hint: a trackpad user can end the session without
-        // finding `Enter`. It calls the same host path as the key.
-        .child(
-            div()
-                .id("tool-finish")
-                .debug_selector(|| "tool-finish".to_string())
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .bg(rgb(ACCENT))
-                .text_color(rgb(FG))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(PANEL_ALT)))
-                .child(action_label("check", "Finish", FG, "tool-finish-icon"))
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.finish_active_tool(cx);
-                })),
-        )
-        .into_any_element()
-}
-
-/// The globals dock: `Undo`, `Redo`, `Fit` and Search, as a vertical pill on the
-/// canvas' **left edge**, centred down it.
-///
-/// **The strict contract.** It holds exactly the `dock`-surface globals and Search:
-///
-/// ```text
-/// [ Undo ]
-/// [ Redo ]
-/// [ Fit  ]
-/// [------]
-/// [ Search (Ctrl+K) ]
-/// ```
-///
-/// It never grows a list of creation or modification buttons — a creation tool declares
-/// `FerroCAD_Surface: "creation"` and gets a pill of its own in the create dock beside the
-/// Modify hand, a shape verb declares `"radial"` or `"palette"` and appears in the wheel or
-/// only in Search. A dock full of verbs is a toolbar.
-///
-/// It is a column on the left because the bottom of the canvas belongs to the two hands:
-/// the Modify bar and the create dock share one row down there, and the armed tool's pill
-/// takes the centre. `blocked` (a pending transform or manipulator) dims the dock to 45 %
-/// and drops its clicks, exactly as the hand column dims.
-pub(crate) fn globals_dock(
-    model: &ShellModel,
-    blocked: bool,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    let dock = model.surfaces().dock;
-    let mut panel = div()
-        .id("globals-dock")
-        .debug_selector(|| "globals-dock".to_string())
-        // The pill owns the hitbox: the wrapper below is only a placement box, so clicks
-        // beside the glass still reach the canvas.
-        .occlude()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap_1()
-        .px_1()
-        .py_1()
-        .rounded_md()
-        .bg(rgba(DOCK_BG))
-        .border_1()
-        .border_color(rgba(DOCK_BORDER))
-        .text_xs()
-        .when(blocked, |el| el.opacity(0.45));
-
-    let mut rendered = false;
-    for command in dock {
-        // A dev-only command is a diagnostics entry: the Dev Tools list and the app
-        // menu show it, a runtime surface never does (the same rule
-        // `popover_commands` applies to a header menu). Without this, a command whose
-        // `FerroCAD_Surface` falls back to the dock would appear over the canvas.
-        if command.dev_only {
-            continue;
-        }
-        rendered = true;
-
-        let id = command.id.clone();
-        let enabled = command.enabled;
-        let checked = command.checked;
-        // The dock is a command strip, not a checklist: checked/live state is **accent
-        // ink**, and the background is reserved for an additive hover.
-        let ink = if !enabled {
-            MUTED
-        } else if checked {
-            ACTIVE_ACCENT
-        } else {
-            FG
-        };
-        let hover_ink = if checked { ACTIVE_ACCENT } else { FG };
-        // The glyph is a secondary mark beside the label, so it takes the same ink as the
-        // text: muted when disabled, accented when the command is live.
-        let glyph = command_glyph(command, icon::ROW, ink).map(|glyph| {
-            div()
-                .debug_selector({
-                    let id = id.clone();
-                    move || format!("dock-{id}-icon")
-                })
-                .flex()
-                .items_center()
-                .child(glyph)
-        });
-        let mut content = div().flex().flex_row().items_center().gap_1();
-        if let Some(glyph) = glyph {
-            content = content.child(glyph);
-        }
-        content = content.child(command.label().to_string());
-
-        let mut button = div()
-            .id(SharedString::from(format!("dock-{id}")))
-            .debug_selector({
-                let id = id.clone();
-                move || format!("dock-{id}")
-            })
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(ink))
-            .when(enabled, |el| {
-                el.cursor_pointer().hover(move |style| {
-                    style.bg(rgba(ROW_HOVER)).text_color(rgb(hover_ink))
-                })
-            })
-            .child(content);
-        if enabled && !blocked {
-            button = button.on_click(cx.listener(move |this, _event, _window, cx| {
-                this.run_command(&id, cx);
-            }));
-        }
-        panel = panel.child(button);
-    }
-
-    if rendered {
-        panel = panel.child(dock_rule(1));
-    }
-    panel = panel.child(
-        div()
-            .id("dock-search")
-            .debug_selector(|| "dock-search".to_string())
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(MUTED))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .debug_selector(|| "dock-search-icon".to_string())
-                            .flex()
-                            .items_center()
-                            .child(
-                                icon::named("search", icon::ROW, MUTED)
-                                    .unwrap_or_else(|| div().into_any_element()),
-                            ),
-                    )
-                    .child("Search (Ctrl+K)"),
-            )
-            .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
-    );
-
-    // The placement box: full height on the left edge, transparent and with no hitbox of
-    // its own, so the canvas behind it still takes the pointer. The pill inside is
-    // content-sized and centred vertically, above the hand column at the bottom.
-    div()
-        .absolute()
-        .left(px(16.))
-        .top(px(0.))
-        .bottom(px(0.))
-        .flex()
-        .flex_col()
-        .justify_center()
-        .child(panel)
+    )
+    .into_any_element()
 }
 
 /// The creation flyout as its own overlay, anchored at the pointer that opened it.
@@ -1945,8 +1894,8 @@ pub(crate) fn creation_pill_tools<'a>(
 /// permanent — there is no control that folds it away, because a loadout that can be put
 /// away is not a loadout, and the six keys that address it would then address nothing.
 ///
-/// It is deliberately **not** part of the globals dock: that pill holds `Undo`/`Redo`/`Fit`
-/// and Search and nothing else, so the globals never change width with an edition.
+/// It is deliberately **not** part of the globals: those hold `Undo`/`Redo`/`Save`, `Fit`
+/// and Search and nothing else, so they never change width with an edition.
 pub(crate) fn create_dock(
     creation: &[&CommandInfo],
     dock: &CreationDock,
@@ -2127,11 +2076,13 @@ fn creation_pill(
     container.into_any_element()
 }
 
-/// The creation flyout: a segmented category header over **one** category's tools.
+/// The creation flyout: the opened pill's categories' tools, and **no header**.
 ///
-/// The header is the strip's own categories, and a category with no registered tool is
-/// not a tab at all. Showing one category at a time is what keeps the panel four or five
-/// rows instead of the fifteen-tool column it used to be.
+/// The panel is the list the caret it hangs from names: one category, a few rows, no tab
+/// bar and no second way to choose a category. The create dock below already carries one
+/// pill per category, so browsing another category is that pill's caret (or the wheel's
+/// `Create ▸`) and the flyout stays a short list instead of the fifteen-tool column it
+/// once was.
 fn creation_flyout(
     creation: &[&CommandInfo],
     dock: &CreationDock,
@@ -2149,8 +2100,11 @@ fn creation_flyout(
         return None;
     }
 
-    // The open tab: the dock's, else the armed tool's category, else the first.
-    let active = dock
+    // The flyout is the **opened pill's** list. There is no category header: browsing
+    // another category is that pill's caret (or the wheel's `Create ▸`), so the panel
+    // never offers the same choice twice. The category comes from the caret that opened
+    // it, else the armed tool's, else the first.
+    let category = dock
         .tab()
         .filter(|tab| categories.iter().any(|name| name.eq_ignore_ascii_case(tab)))
         .map(str::to_string)
@@ -2161,20 +2115,11 @@ fn creation_flyout(
         })
         .or_else(|| categories.first().map(|name| name.to_string()))?;
 
-    let tabs: Vec<MenuTab> = categories
-        .iter()
-        .map(|name| MenuTab {
-            id: (*name).to_string().into(),
-            label: (*name).to_string().into(),
-            active: name.eq_ignore_ascii_case(&active),
-        })
-        .collect();
-
     let mut rows = Vec::new();
     for command in &tools {
         if !command
             .category()
-            .is_some_and(|name| name.eq_ignore_ascii_case(&active))
+            .is_some_and(|name| name.eq_ignore_ascii_case(&category))
             || rows.len() >= CREATION_ROW_KEYS
         {
             continue;
@@ -2206,20 +2151,20 @@ fn creation_flyout(
                 .anchor(Anchor::BottomLeft)
                 .position(position)
                 .snap_to_window_with_margin(px(8.))
-                .child(creation_popover(tabs, rows, cx)),
+                .child(creation_popover(rows, cx)),
         )
         .with_priority(1)
         .into_any_element(),
     )
 }
 
-/// The flyout's panel: the reusable menu with a tab bar, wired back to the shell.
-fn creation_popover(
-    tabs: Vec<MenuTab>,
-    rows: Vec<PopoverRow>,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    popover_with_tabs("create", Vec::new(), tabs, rows, Some("creation_pill"), cx)
+/// The flyout's panel: the reusable menu, one category's rows and no header.
+///
+/// It used to carry a **tab bar** of categories; the create dock already has a pill per
+/// category in the row below, so the tabs were a second control for the same choice —
+/// and the one that had to be learned. A pill's caret opens its own list instead.
+fn creation_popover(rows: Vec<PopoverRow>, cx: &mut Context<Shell>) -> impl IntoElement {
+    popover_with_info("create", Vec::new(), rows, Some("creation_pill"), cx)
 }
 
 /// The command ids owned by a backend that is **not** the active one for its feature,
@@ -2344,34 +2289,176 @@ pub(crate) fn command_list_panel(
         .child(scroll_area("dev-commands", scroll, rows))
 }
 
-/// The status bar's literal bug: toggles the Dev Tools window.
+/// The widest a status card may grow.
 ///
-/// The bug is an embedded SVG ([`icon::bug`], no font dependency), inked with the
-/// accent while the window is open. The status bar is its home because Dev Tools is a
-/// tool for the shell, not a modelling verb the viewport dock should carry.
-pub(crate) fn dev_tools_button(active: bool, cx: &mut Context<Shell>) -> impl IntoElement {
-    let tip: SharedString = if active {
-        "Dev Tools: open (Ctrl+Shift+D)"
-    } else {
-        "Dev Tools (Ctrl+Shift+D)"
-    }
-    .into();
-    div()
-        .id("dev-tools-bug")
-        .debug_selector(|| "dev-tools-bug".to_string())
-        .w(px(22.))
-        .h(px(18.))
+/// A card **shrinks to its message**, so `Selected Rectangle` stays a short card rather
+/// than a wide, mostly empty box; a long solver sentence — `interaction error: extrude on
+/// Face1 failed; the body is unchanged` — wraps inside this bound instead of stretching
+/// across the canvas and over the bottom dock.
+pub(crate) const TOAST_MAX_WIDTH: f32 = 340.;
+
+/// How far the notification corner sits above the viewport floor.
+///
+/// The bottom-left tool dock is 12 px above the floor and its pill row is about 38 px
+/// tall, so a corner at 16 px let a wide dock's top-right border run under the newest card
+/// on a narrow window. Fifty-eight keeps the feed in the corner while leaving that row an
+/// 8 px gap; the hover report shares the column and sits above the cards.
+pub(crate) const TOAST_CORNER_BOTTOM: f32 = 58.;
+
+/// The transient action toast.
+///
+/// One card of the bottom-right feed, so it always floats above whatever bars the active
+/// tool has added. The geometry matches the docks (a 6 px radius, 4 × 12 padding, 12 px
+/// type) rather than a capsule, and the inline `Undo` is a chip so it reads as a control
+/// without competing with the copy.
+///
+/// The row **top-aligns** its glyph and controls: when the message wraps, the `✓`/`✕` and
+/// the chip stay on the first line where the eye starts instead of floating in the vertical
+/// middle of a two-line card. A click anywhere on the card dismisses it.
+fn status_toast(
+    toast: &crate::shell::toast::Toast,
+    show_undo: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    use crate::shell::toast::StatusKind;
+
+    let (glyph, ink, border) = match toast.kind {
+        StatusKind::Success => ("✓", CHROME_ACTIVE, 0x38bdf840),
+        StatusKind::Warning => ("!", STATUS_WARNING, (STATUS_WARNING << 8) | 0x66),
+        StatusKind::Error => ("✕", STATUS_ERROR, (STATUS_ERROR << 8) | 0x66),
+        StatusKind::Info => ("•", MUTED, 0x38bdf840),
+    };
+    let sticky = toast.kind.sticky();
+    let undo = show_undo;
+    let now = web_time::Instant::now();
+    let opacity = if sticky { 1.0 } else { toast.opacity(now) };
+    let slide = if sticky { 0.0 } else { toast.enter_offset(now) };
+
+    let id = toast.id;
+    let mut pill = div()
+        .id(SharedString::from(format!("status-toast-{id}")))
+        .debug_selector({
+            let id = id;
+            move || format!("status-toast-{id}")
+        })
+        .occlude()
+        .relative()
+        .top(px(slide))
+        .max_w(px(TOAST_MAX_WIDTH))
         .flex()
-        .items_center()
-        .justify_center()
+        .flex_row()
+        .items_start()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(TOAST_BG))
+        .border_1()
+        .border_color(rgba(border))
+        .text_xs()
+        .text_color(rgb(FG))
+        .opacity(opacity)
+        .child(div().text_color(rgb(ink)).child(glyph))
+        .child(
+            // The card is only as wide as its message, up to the cap; the copy may shrink
+            // below its longest word so a long sentence wraps instead of widening the card.
+            div()
+                .min_w_0()
+                .child(crate::shell::toast::headline(&toast.text)),
+        );
+
+    if undo {
+        pill = pill.child(
+            div()
+                .id(SharedString::from(format!("toast-undo-{id}")))
+                .debug_selector({
+                    let id = id;
+                    move || format!("toast-undo-{id}")
+                })
+                .px(px(6.))
+                .py(px(2.))
+                .rounded_sm()
+                .bg(rgba(0xffffff14))
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| {
+                    style
+                        .bg(rgba(0xffffff24))
+                        .text_color(rgb(CHROME_ACTIVE))
+                })
+                .child("Undo")
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.dismiss_toast(id, cx);
+                    this.run_command("App_Undo", cx);
+                })),
+        );
+    }
+
+    // The card itself is the dismiss target. A `×` was a second, tiny hit box on a
+    // control that is already a transient overlay, and a click anywhere on the card is the
+    // gesture that reads first; the inline `Undo` keeps its own press, so dismissing and
+    // undoing never disagree.
+    pill.cursor_pointer()
+        .hover(|style| style.bg(rgba(TOAST_HOVER_BG)))
+        .on_click(cx.listener(move |this, _event, _window, cx| this.dismiss_toast(id, cx)))
+        .into_any_element()
+}
+
+/// The status toasts as a notification feed in the bottom-right corner.
+///
+/// The stack is a `column-reverse` feed and the newest toast is its first child, so a new
+/// message lands nearest the corner and pushes the older ones up. It is sized by its cards
+/// (right-aligned, each one fit-content up to [`TOAST_MAX_WIDTH`]) rather than by a fixed
+/// width, and it paints nothing of its own: the caller's corner overlay supplies the
+/// `right: 16`/`bottom: 16` anchor, measured from the viewport's own bounds.
+pub(crate) fn status_toast_stack(
+    toasts: &[crate::shell::toast::Toast],
+    depth: usize,
+    label: &str,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    if toasts.is_empty() {
+        return div().into_any_element();
+    }
+    let mut stack = div()
+        .id("status-toasts")
+        .debug_selector(|| "status-toasts".to_string())
+        .max_w(px(TOAST_MAX_WIDTH))
+        .flex()
+        .flex_col_reverse()
+        .items_end()
+        .gap_2();
+    // Newest first, because a reversed column lays its first child at the corner.
+    for toast in toasts.iter().rev() {
+        // The chip is on the toast whose entry is still the top of the stack, never on
+        // every pill: with several toasts, an older chip would undo someone else's
+        // action.
+        stack = stack.child(status_toast(toast, toast.offers_undo(depth, label), cx));
+    }
+    stack.into_any_element()
+}
+
+/// The hover report as a quiet pill in the bottom-right corner.
+///
+/// The status strip's hover line moved here when the strip went away: it appears only
+/// while the pointer is over something with a report, and it has no hitbox of its own. It
+/// is a child of the same corner column as the toast feed — above the cards — so the two
+/// can never overlap: the newest card always owns the corner.
+pub(crate) fn hover_hint(text: &str) -> AnyElement {
+    if text.trim().is_empty() {
+        return div().into_any_element();
+    }
+    div()
+        .max_w(px(TOAST_MAX_WIDTH))
+        .debug_selector(|| "hover-hint".to_string())
+        .px_2()
+        .py_1()
         .rounded_sm()
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(PANEL)))
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            this.run_command(DEV_TOOLS, cx);
-        }))
-        .tooltip(move |_window, cx| cx.new(|_| CommandTooltip { text: tip.clone() }).into())
-        .child(icon::bug("dev-tools-icon", active))
+        .bg(rgba(WHEEL_GLASS))
+        .text_xs()
+        .text_color(rgb(0x38bdf8))
+        .child(text.to_string())
+        .into_any_element()
 }
 
 /// A command row's hover text: `ToolTip` and the accelerator.
@@ -2398,6 +2485,29 @@ impl Render for CommandTooltip {
 mod tests {
     use super::*;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
+
+    /// The Undo tooltip is the passive memory of the stack; every other action keeps its
+    /// plain label.
+    #[test]
+    fn the_document_action_tip_names_the_top_of_its_stack() {
+        assert_eq!(
+            document_action_tip("App_Undo", "Undo", "Ctrl+Z", "Move 1 object", ""),
+            "Undo: Move 1 object (Ctrl+Z)"
+        );
+        assert_eq!(
+            document_action_tip("App_Undo", "Undo", "Ctrl+Z", "", ""),
+            "Undo (Ctrl+Z)"
+        );
+        assert_eq!(
+            document_action_tip("App_Redo", "Redo", "Ctrl+Shift+Z", "", "Move 1 object"),
+            "Redo: Move 1 object (Ctrl+Shift+Z)"
+        );
+        assert_eq!(
+            document_action_tip("App_Save", "Save", "Ctrl+S", "Move", "Move"),
+            "Save (Ctrl+S)",
+            "only history actions name the stack"
+        );
+    }
 
     /// Paint the window once so a following `simulate_*` has hitboxes to dispatch to.
     fn draw(cx: &mut VisualTestContext) {

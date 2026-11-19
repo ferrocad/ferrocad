@@ -59,7 +59,7 @@ impl Shell {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = format!("viewport GPU: {error}");
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 cx.notify();
                 return;
@@ -72,7 +72,7 @@ impl Shell {
             } else {
                 format!("viewport GPU: {}", outcome.error)
             };
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -87,7 +87,7 @@ impl Shell {
             "viewport GPU: {} (zero-copy keeps the window adapter)",
             outcome.value
         );
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }
@@ -114,7 +114,7 @@ impl Shell {
         let prefs = self.model.lock().unwrap().prefs.prefs.clone();
         if !prefs.provider_enabled(feature, backend) {
             let status = format!("{feature}: {backend} is hidden in Settings/About");
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -124,7 +124,7 @@ impl Shell {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = format!("{feature}: {error}");
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 cx.notify();
                 return;
@@ -137,7 +137,7 @@ impl Shell {
             } else {
                 format!("{feature}: {}", outcome.error)
             };
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -189,7 +189,7 @@ impl Shell {
                 }
             }
         }
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }
@@ -230,7 +230,7 @@ impl Shell {
                 return;
             }
             let status = self.save_datum_plane(cx);
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -276,7 +276,7 @@ impl Shell {
         // every registry path (shortcut list, Dev Tools list, upstream script) sees it.
         if id == crate::dev_tools::TOGGLE_COMMAND {
             let status = self.toggle_dev_tools(cx);
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -312,7 +312,7 @@ impl Shell {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = format!("{id}: {error}");
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 cx.notify();
                 return;
@@ -331,7 +331,7 @@ impl Shell {
             } else {
                 format!("{id}: {}", outcome.error)
             };
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -376,7 +376,7 @@ impl Shell {
                 } else {
                     outcome.status.clone()
                 };
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 cx.notify();
                 return;
@@ -392,7 +392,7 @@ impl Shell {
                     outcome.status.clone()
                 }
             };
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             // A command can return a dialog *and* have changed the document.
             self.refresh(cx);
@@ -408,7 +408,7 @@ impl Shell {
                 Ok(summary) => summary,
                 Err(error) => format!("view: {error}"),
             };
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -418,7 +418,7 @@ impl Shell {
         // opens a transaction.
         if let Some(tool) = &outcome.tool {
             let status = self.start_tool(tool, cx);
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -464,7 +464,7 @@ impl Shell {
         } else {
             format!("ran {id}")
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }

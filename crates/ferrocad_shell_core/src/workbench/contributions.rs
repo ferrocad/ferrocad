@@ -65,9 +65,20 @@ pub fn base_contributions() -> Contributions {
         .with_tool("workplane_points", || {
             Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn Tool>
         })
-        // The primitive every edition can place: `Part_Box` arms it, the strip carries
-        // its `W`/`L`/`H`, and `Enter` commits — the zero-mouse creation path.
+        // The primitives every edition can place: `Part_Box`/`Part_Cylinder`/`Part_Sphere`/
+        // `Part_Cone` arm them, the row carries their numbers, and `Enter`/the shared `✓`
+        // commits — the zero-mouse creation path.
         .with_tool("box", || Box::new(ferrocad_stage::BoxTool::new()) as Box<dyn Tool>)
+        // The round solids share one tool: a kind, its parameters and a preview mesh.
+        .with_tool("cylinder", || {
+            Box::new(ferrocad_stage::PrimitiveTool::cylinder()) as Box<dyn Tool>
+        })
+        .with_tool("sphere", || {
+            Box::new(ferrocad_stage::PrimitiveTool::sphere()) as Box<dyn Tool>
+        })
+        .with_tool("cone", || {
+            Box::new(ferrocad_stage::PrimitiveTool::cone()) as Box<dyn Tool>
+        })
 }
 
 /// The world-aligned base corner (minimum X/Y/Z) of a body's bounding box.

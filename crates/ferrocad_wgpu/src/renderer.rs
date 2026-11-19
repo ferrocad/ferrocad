@@ -535,6 +535,8 @@ impl WgpuRenderer {
         self.ensure_textures(batches);
 
         let view_proj = mat4_to_wgsl(&camera.view_projection());
+        let [width, height] = self.size;
+        let viewport = [width as f32, height as f32, 0.0, 0.0];
         for (index, batch) in batches.iter().enumerate() {
             let snapshot = batch.state();
             let data = UniformData {
@@ -546,6 +548,7 @@ impl WgpuRenderer {
                 topology: topology_ordinal(batch.topology()),
                 depth_bias: snapshot.depth_bias,
                 two_tone: u32::from(snapshot.shade[3] > 0.0),
+                viewport,
             };
             self.uniforms.write(&self.context.queue, index as u32, &data);
         }
@@ -644,6 +647,7 @@ impl WgpuRenderer {
                         batch.topology(),
                         &snapshot.depth,
                         snapshot.ribbon,
+                        snapshot.sprite,
                     ));
                     pass.set_bind_group(
                         0,
@@ -799,8 +803,16 @@ impl WgpuRenderer {
             self.ensure_textures(&view.queue.packets);
         }
         let mut slot = 0u32;
+        let [width, height] = self.size;
         for view in views {
             let view_proj = mat4_to_wgsl(&view.camera.view_projection());
+            // A packet's sprite is sized in the pixels of the viewport it is drawn
+            // through, and an overlay's rectangle is its own viewport.
+            let (w, h) = match view.rect {
+                Some(rect) => (rect.width.max(1), rect.height.max(1)),
+                None => (width, height),
+            };
+            let viewport = [w as f32, h as f32, 0.0, 0.0];
             for batch in &view.queue.packets {
                 let snapshot = batch.state();
                 self.uniforms.write(
@@ -815,6 +827,7 @@ impl WgpuRenderer {
                         topology: topology_ordinal(batch.topology),
                         depth_bias: snapshot.depth_bias,
                         two_tone: u32::from(snapshot.shade[3] > 0.0),
+                        viewport,
                     },
                 );
                 slot += 1;
@@ -944,6 +957,7 @@ impl WgpuRenderer {
                             batch.topology(),
                             &snapshot.depth,
                             snapshot.ribbon,
+                            snapshot.sprite,
                         ));
                         pass.set_bind_group(
                             0,
@@ -1083,6 +1097,7 @@ impl WgpuRenderer {
         self.ensure_uniform_capacity(queue.packets.len() as u32);
         self.upload_packets(0, &queue.packets);
         let view_proj = mat4_to_wgsl(&camera.view_projection());
+        let viewport = [width as f32, height as f32, 0.0, 0.0];
         for (index, packet) in queue.packets.iter().enumerate() {
             self.uniforms.write(
                 &self.context.queue,
@@ -1096,6 +1111,7 @@ impl WgpuRenderer {
                     topology: topology_ordinal(packet.topology),
                     depth_bias: packet.state.depth_bias,
                     two_tone: u32::from(packet.state.shade[3] > 0.0),
+                    viewport,
                 },
             );
         }
@@ -2435,6 +2451,130 @@ pub(crate) mod tests {
         );
     }
 
+    /// A native grid dot is a **screen-space sprite**: the same mark — a couple of device
+    /// pixels across — whatever the render target and whatever the depth, and it carries
+    /// the token ink rather than a fraction of it.
+    ///
+    /// This is the regression that made the native grid read as faint, or as 3D geometry,
+    /// depending on which way it was sized: a one-device-pixel `PointList` dot is a quarter
+    /// of the Coin shader's two-pixel disc, and a world-sized quad follows the camera (big
+    /// near, gone far) *and* puts a camera-derived width into `grid::ground_key`, which
+    /// rebuilt the whole lattice on every orbiting frame. Skips without a GPU.
+    #[test]
+    fn a_native_dot_is_a_screen_space_sprite() {
+        use ferrocad_graphics::{Geometry, Projection, Vertex};
+        use ferrocad_stage::grid::{self, GridSpec, GridStyle};
+        use ferrocad_stage::shape::BLENDED_DEPTH;
+        use ferrocad_stage::Workplane;
+        use ferrocad_types::{Placement, Rotation};
+
+        let _gpu = gpu_guard();
+        let spec = GridSpec {
+            workplane: Workplane::world(),
+            minor: 40.0,
+            major: 400.0,
+            radius: 100.0,
+        };
+        let perspective = Projection::Perspective {
+            fov_y: 60.0f64.to_radians(),
+            near: 0.1,
+            far: 2_000.0,
+        };
+        let orthographic = Projection::Orthographic {
+            extent: 120.0,
+            near: 0.1,
+            far: 2_000.0,
+        };
+
+        // The dot field as the viewport emits it: one sprite packet at the token ink.
+        // `per_dot` returns `(pixels a dot changes, strongest channel delta, those pixels)`.
+        let per_dot = |size: [u32; 2], projection: Projection| -> (f64, u8, usize) {
+            let Ok(mut renderer) = WgpuRenderer::new_default(size) else {
+                return (0.0, 0, 0);
+            };
+            let camera = Camera {
+                view: Placement::new(Vector3::new(0.0, 0.0, -200.0), Rotation::identity())
+                    .to_matrix(),
+                projection,
+                viewport: Viewport::new(size, 1.0),
+            };
+            let style = GridStyle {
+                color: [1.0; 4],
+                major_alpha: 0.0,
+                ..GridStyle::default()
+            };
+            let geometry = grid::build(&spec, &style, &camera);
+            let dots = geometry.dots.len() / 4;
+            let mut packet = pick_packet(900, 0, 0, Topology::Triangles, Vec::new(), Vec::new());
+            packet.state.depth = BLENDED_DEPTH;
+            packet.state.pickable = false;
+            packet.state.sprite = true;
+            packet.geometry = Some(std::sync::Arc::new(Geometry {
+                vertices: geometry
+                    .dots
+                    .iter()
+                    .map(|vertex| Vertex {
+                        normal: vertex.normal,
+                        ..*vertex
+                    })
+                    .collect(),
+                indices: geometry.dot_indices.clone(),
+            }));
+
+            // The canvas gradient differs per row, so the mark is measured against the
+            // same frame drawn without it.
+            renderer
+                .draw(&RenderQueue::default(), &camera)
+                .expect("empty draw");
+            let baseline = renderer.image().expect("baseline readback");
+            let mut queue = RenderQueue::default();
+            queue.packets.push(packet);
+            renderer.draw(&queue, &camera).expect("draw");
+            let image = renderer.image().expect("readback");
+
+            let changed: Vec<u8> = image
+                .rgba
+                .chunks(4)
+                .zip(baseline.rgba.chunks(4))
+                .filter_map(|(drawn, plain)| {
+                    let delta = drawn[0].saturating_sub(plain[0]);
+                    (delta > 0).then_some(delta)
+                })
+                .collect();
+            let peak = changed.iter().copied().max().unwrap_or(0);
+            (changed.len() as f64 / dots as f64, peak, changed.len())
+        };
+
+        let (one_x, peak, lit) = per_dot([200, 200], perspective.clone());
+        if lit == 0 {
+            eprintln!("no GPU adapter available; skipping native dot test");
+            return;
+        }
+        // A 1 px `PointList` dot changes one (at most two) pixels; a two-pixel sprite with
+        // its MSAA edge changes this many, which is the Coin disc's ink.
+        assert!(
+            one_x >= 4.0,
+            "a dot is a two-pixel mark, not a point: {one_x} px/dot"
+        );
+        // The token alpha keeps the mark clear of the canvas void.
+        assert!(peak > 60, "the dot ink is faint against the canvas: {peak}");
+
+        // Twice the render target is the same mark: the size is the viewport's pixels, not
+        // a fraction of the view and not the world.
+        let (two_x, _, _) = per_dot([400, 400], perspective);
+        assert!(
+            (one_x - two_x).abs() <= 1.0,
+            "the dot is sized in device pixels: {one_x} px at 200, {two_x} px at 400"
+        );
+        // An orthographic view has no perspective divide to cancel (`w` is 1), so the same
+        // expansion has to hold there too: the grid is projected both ways.
+        let (ortho, _, _) = per_dot([200, 200], orthographic);
+        assert!(
+            (one_x - ortho).abs() <= 1.0,
+            "the dot is the same mark in orthographic: {one_x} vs {ortho}"
+        );
+    }
+
     /// The ribbon fragment stage feathers the last pixel of each side. The quad spans
     /// `uv.x` 0..1 over 16 px, shifted half a pixel so its left edge falls through the
     /// centre of column 7: that column is half-covered, while column 8 and the centre
@@ -3090,6 +3230,7 @@ pub(crate) mod tests {
                 depth: Default::default(),
                 pickable: true,
                 ribbon: false,
+                sprite: false,
                 program: None,
             },
         }
@@ -3518,9 +3659,10 @@ pub(crate) mod tests {
     }
 
     /// A scene whose second shape is a geometry program packet built from `source`,
-    /// optionally behind an opaque red box at `z = 1` (between the eye at `z = 100` and
-    /// the plane at `z = 0`).
-    fn program_scene(with_box: bool, source: &str) -> Scene {
+    /// optionally behind an opaque red quad at the given `z` (the eye is at `z = 100`, the
+    /// program's plane at `z = 0`, so `Some(1.0)` is a blocker in front and `Some(0.0)` is
+    /// a face the grid is bound to — coplanar with it).
+    fn program_scene(blocker_z: Option<f32>, source: &str) -> Scene {
         use ferrocad_inventor::{ShaderStage, ShaderStageKind};
 
         let leaf = |kind| Node {
@@ -3535,12 +3677,12 @@ pub(crate) mod tests {
             })
         };
         let mut children = Vec::new();
-        if with_box {
+        if let Some(z) = blocker_z {
             children.push(leaf(NodeKind::Coordinate3(vec![
-                [-1.5, -1.5, 1.0],
-                [1.5, -1.5, 1.0],
-                [1.5, 1.5, 1.0],
-                [-1.5, 1.5, 1.0],
+                [-1.5, -1.5, z],
+                [1.5, -1.5, z],
+                [1.5, 1.5, z],
+                [-1.5, 1.5, z],
             ])));
             children.push(leaf(NodeKind::Material(vec![[1.0, 0.0, 0.0, 1.0]])));
             children.push(mesh());
@@ -3596,7 +3738,7 @@ pub(crate) mod tests {
 
         // Only the program packet: the world Y axis (x = 0, column 32) is a green line;
         // column 52 sits between two minor lines and stays background.
-        let (queue, _) = compile(&program_scene(false, &source));
+        let (queue, _) = compile(&program_scene(None, &source));
         assert_eq!(queue.len(), 1, "the program packet is the only draw");
         assert!(queue.packets[0].state.program.is_some());
         renderer.draw(&queue, &camera).expect("draw the grid");
@@ -3621,7 +3763,7 @@ pub(crate) mod tests {
 
         // The opaque box at z = 1 is in front of the grid plane at z = 0: it must win
         // every pixel it covers, and it remains pickable.
-        let (queue, _) = compile(&program_scene(true, &source));
+        let (queue, _) = compile(&program_scene(Some(1.0), &source));
         assert_eq!(queue.len(), 2, "the box and the program packet");
         renderer.draw(&queue, &camera).expect("draw the box and grid");
         let image = renderer.image().expect("readback");
@@ -3696,7 +3838,7 @@ pub(crate) mod tests {
             return;
         };
 
-        let (mut program, _) = compile(&program_scene(false, crate::FIXTURE_PROGRAM_WGSL));
+        let (mut program, _) = compile(&program_scene(None, crate::FIXTURE_PROGRAM_WGSL));
         let program_packet = program.packets.remove(0);
         // An opaque blue quad *behind* the grid plane (z = -1, farther from the eye).
         let mut behind = pick_packet(
@@ -3744,7 +3886,7 @@ pub(crate) mod tests {
             eprintln!("the workspace mods/ tree is absent; skipping coin ink test");
             return;
         };
-        let (queue, _) = compile(&program_scene(false, &source));
+        let (queue, _) = compile(&program_scene(None, &source));
 
         // 16 px per world unit: a 0.5 minor step is every 8 px (column 40), a 1.0 major
         // step every 16 px (column 48). Rows 24 and 28 are off the horizontal lines.
@@ -3804,6 +3946,168 @@ pub(crate) mod tests {
         );
     }
 
+    /// A workplane bound to a face draws its grid **on** that face.
+    ///
+    /// The shader decides its own `frag_depth`, so the bias sign is the whole difference:
+    /// subtract it (towards the camera, `scene.wgsl`'s contract) and the lattice reads over
+    /// the coplanar face; add it and the face wins, leaving the grid only outside the
+    /// silhouette — it dissolves into the surface it is meant to sit on. Skips without a
+    /// GPU.
+    #[test]
+    fn the_coin_grid_draws_on_the_coplanar_face_it_is_bound_to() {
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping the coplanar grid test");
+            return;
+        };
+        let Some(source) = crate::grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the coplanar grid test");
+            return;
+        };
+
+        let plane = || WorkplaneFrame {
+            minor: 0.5,
+            major: 1.0,
+            radius: 0.0,
+            minor_alpha: 0.6,
+            major_alpha: 0.6,
+            ..WorkplaneFrame::world()
+        };
+        let shot = |renderer: &mut WgpuRenderer, scene: &Scene| {
+            let (queue, _) = compile(scene);
+            renderer
+                .draw_frame(&[ViewSpec {
+                    queue: &queue,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                    workplane: Some(plane()),
+                }])
+                .expect("draw");
+            renderer.image().expect("readback")
+        };
+        // The brightest green in a 3x3 window: a 1 px lattice line lands between samples.
+        let peak = |image: &ImageData, x: u32, y: u32| {
+            let mut best = 0u8;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    best = best.max(texel(image, x - 1 + dx, y - 1 + dy)[1]);
+                }
+            }
+            best
+        };
+
+        // A 3x3-world quad through the eye is coplanar with the grid's plane (z = 0), so it
+        // is the face a bound workplane would be.
+        let bare = shot(&mut renderer, &program_scene(None, &source));
+        let face = shot(&mut renderer, &program_scene(Some(0.0), &source));
+
+        // The face really drew, and it is opaque: the gap between lattice lines is red.
+        let bare_face = texel(&bare, 36, 28);
+        let lit_face = texel(&face, 36, 28);
+        assert!(
+            lit_face[0] > bare_face[0] + 20 && lit_face[1] < lit_face[0],
+            "the coplanar face is drawn: bare {bare_face:?}, face {lit_face:?}"
+        );
+
+        // ...and the major line still reads on top of it, in the grid's green.
+        let line = peak(&face, 48, 28);
+        let gap = peak(&face, 36, 28);
+        assert!(
+            line > gap + 20,
+            "the grid sits on the face: line {line}, gap {gap}"
+        );
+    }
+
+    /// A minor **dot** carries the same ink as a line at the same alpha, whatever the
+    /// sub-pixel phase and whatever width the host sends.
+    ///
+    /// Both widths are exercised: `0` is what the viewport sends (a dot is a screen-space
+    /// mark, so it has no world width — the shader floors the radius at a pixel) and `2` is a
+    /// wider disc, which must read the same way. Neither may dim when the lattice lands
+    /// between pixel centres. Skips without a GPU.
+    #[test]
+    fn a_minor_dot_carries_the_same_ink_as_a_line() {
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping the minor dot test");
+            return;
+        };
+        let Some(source) = crate::grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the minor dot test");
+            return;
+        };
+        let (queue, _) = compile(&program_scene(None, &source));
+        let peak = |image: &ImageData, x: u32, y: u32| {
+            let mut best = 0u8;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    best = best.max(texel(image, x - 1 + dx, y - 1 + dy)[1]);
+                }
+            }
+            best
+        };
+
+        // 16 px per world unit. The minor-only intersections (±0.5, ±0.5) land on
+        // (40, 24), (40, 40), (24, 24) and (24, 40); the major line at x = 1.0 crosses
+        // row 28 at column 48.
+        let dots = [(40u32, 24u32), (40, 40), (24, 24), (24, 40)];
+        let weakest = |image: &ImageData| {
+            dots.iter()
+                .map(|&(x, y)| peak(image, x, y))
+                .min()
+                .expect("four dots")
+        };
+
+        for pixels in [0.0f32, 2.0] {
+            // One alpha for both levels, so the only difference is what the shader does
+            // with a mark. The two frames differ only in where the lattice lands inside a
+            // pixel: the plane origin is nudged half a pixel.
+            let plane = |offset: f32| WorkplaneFrame {
+                origin: [offset, offset, 0.0],
+                minor: 0.5,
+                major: 1.0,
+                radius: 0.0,
+                minor_alpha: 0.6,
+                major_alpha: 0.6,
+                minor_lines: false,
+                major_width: 0.0,
+                minor_width: pixels / 16.0,
+                ..WorkplaneFrame::world()
+            };
+            let shot = |renderer: &mut WgpuRenderer, offset: f32| {
+                renderer
+                    .draw_frame(&[ViewSpec {
+                        queue: &queue,
+                        camera: &camera,
+                        rect: None,
+                        overlay: false,
+                        workplane: Some(plane(offset)),
+                    }])
+                    .expect("draw");
+                renderer.image().expect("readback")
+            };
+
+            let aligned = shot(&mut renderer, 0.0);
+            let between = shot(&mut renderer, 0.5 / 16.0);
+            let line = peak(&aligned, 48, 28);
+            assert!(line > 40, "{pixels} px: the major line draws: {line}");
+            assert!(
+                f64::from(weakest(&aligned)) > 0.75 * f64::from(line),
+                "{pixels} px: a dot is as strong as a line at the same alpha: dots {}, line {line}",
+                weakest(&aligned)
+            );
+            assert!(
+                f64::from(weakest(&between)) > 0.75 * f64::from(weakest(&aligned)),
+                "{pixels} px: a dot does not dim between pixel centres: {} vs {}",
+                weakest(&between),
+                weakest(&aligned)
+            );
+        }
+    }
+
     /// The viewport's real shape: the scene and the program queue are **separate
     /// views**, the program pipeline is cached across frames, and the element is
     /// resized between them. Every frame must draw the grid, not a cleared or black
@@ -3827,7 +4131,7 @@ pub(crate) mod tests {
             eprintln!("the workspace mods/ tree is absent; skipping the resize/program test");
             return;
         };
-        let (program, _) = compile(&program_scene(false, &source));
+        let (program, _) = compile(&program_scene(None, &source));
         // ...and an overlay view above the program view, as the navigation cube does.
         let (cube, _) = compile(&overlay_quad());
         let rect = Rect::new(40, 40, 24, 24);

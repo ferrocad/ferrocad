@@ -149,8 +149,8 @@ for both modes.
      `High Contrast` under `Inspection`.
 4. **Status bar feedback.** A preset change calls `Shell::set_status` with a one-line
    message, e.g. `"High Contrast Viewport applied"`, matching the existing
-   command-status line. The trigger's own label stays `Scene`; the state lives in the
-   popover and the status line, never as a colour swatch.
+   command-status toast. The trigger's own label stays `Scene`; the state lives in the
+   popover and the status toast, never as a colour swatch.
 
 The segmented strip is the one new shared control: the `PERSP ┆ ORTHO` strip is a
 private `projection_button` in `ferrocad_viewport::inventor_view`, so lift an

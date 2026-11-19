@@ -116,7 +116,7 @@ fn the_delete_command_removes_two_selected_slabs_in_one_step() {
 
     let outcome = python::run_command("App_Delete").expect("the bridge");
     assert!(outcome.ok, "{}", outcome.error);
-    assert_eq!(outcome.status, "deleted 2 object(s)");
+    assert_eq!(outcome.status, "deleted 2 objects");
     assert!(slab_names().is_empty(), "both slabs are gone");
 
     // One command, one transaction: a single undo restores both.

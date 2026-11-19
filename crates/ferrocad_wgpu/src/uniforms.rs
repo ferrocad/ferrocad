@@ -36,6 +36,12 @@ pub struct UniformData {
     /// This occupies the old padding word, so the uniform block stays a multiple of
     /// 16 bytes and the pick shader's layout matches.
     pub two_tone: u32,
+    /// The view's size in **device pixels**, `[width, height, 0, 0]`.
+    ///
+    /// A screen-space point sprite is sized in pixels (`vs_sprite`), and one pixel is
+    /// `2 / viewport` in normalised device coordinates. The trailing pair is padding so
+    /// the row is 16-byte aligned; the pick shader does not declare the field.
+    pub viewport: [f32; 4],
 }
 
 /// The size of one [`UniformData`] in bytes.

@@ -30,8 +30,8 @@ now renders (§6.2).
 | --- | --- | --- | --- |
 | App menu | Unicode `☰` text | embedded `menu` glyph; rows carry the command's glyph | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
 | Header controls | status dot + text + `▾` | embedded glyph + text + `▾` | `chrome.rs`; `screenshot.png` |
-| Action dock | text labels | glyph + text label | `chrome.rs` |
-| Active-action bar (tool strip) | `Cancel` / `Finish` words | `close` / `check` glyph + word | `crates/ferrocad_shell_core/src/shell/render.rs` |
+| Globals | text labels in a left-edge card | `Undo`/`Redo`/`Save` icon-only beside the title, Search pill centred in the title bar, `Fit` in the navicube bar (2026-11-19) | `chrome.rs`, `inventor_view.rs` |
+| Active-action bar (tool strip) | `Cancel` / `Finish` words | the shared decision pill's `✗` / `✓` (2026-11-19), the same strip a modal footer and the Move form draw | `crates/ferrocad_shell_core/src/shell/render.rs` |
 | Loadout bar | hotkey + hand label | hotkey + hand glyph + label | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
 | Header popovers | `PopoverRow { label, accel, checked, … }` | glyph + label + accel + status dot | `chrome.rs` |
 | Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
@@ -326,13 +326,13 @@ candidate.
 | Save | app menu | `document-save` | `save` | use |
 | Save all | — | `Std_SaveAll` | `save-all` | use |
 | Print | — | `document-print` | `printer` | use |
-| Undo | — | `edit-undo` | `undo` | use |
-| Redo | — | `edit-redo` | `redo` | use |
+| Undo | header | `edit-undo` | `undo` | authored arrow |
+| Redo | header | `edit-redo` | `redo` | authored arrow |
 | Copy | — | `edit-copy` | `copy` | use |
 | Cut | — | `edit-cut` | `scissors` | use |
 | Paste | — | `edit-paste` | `paste` | use |
 | Delete | wheel | `edit-delete` | `trash` | use |
-| Search commands | dock | — | `search` | use |
+| Search commands | header | — | `search` | use |
 | Preferences | settings | `preferences-general` | `settings` | use |
 | Dev Tools | app menu | — | `bug` | use |
 | Confirm | dialog | `edit_OK` | `check` | use |
@@ -997,9 +997,10 @@ Draft icons it can draw.
   | --- | --- | --- |
   | App menu button | `menu`, or `☰` only if the asset is missing | 16 px |
   | App menu / header popover rows | `resolve(row command)` | 14 px (`icon::ROW`) |
-  | Action dock buttons | `resolve(command)`, followed by the label | 14 px |
-  | Action dock Search | `search` | 14 px |
-  | Active-action bar (`Cancel` / `Finish`) | `close` / `check` | 14 px |
+  | Title actions (`Undo`, `Redo`, `Save`) | `resolve(command)` icon only, tooltip names it | 14 px (`icon::ROW`) |
+  | Navicube bar (`Fit`) | text, beside `Home` and the projection toggle | 11 px (`CHROME_FONT`) |
+  | Search pill | `search` + `Search` + `Ctrl+K` | 14 px (`icon::ROW`) |
+  | Active-action bar (`✗` / `✓`) | the decision pill's glyphs — no icon font `close`/`check` | 12 px text |
   | Loadout bar slots | `move` / `rotate-object` (by gizmo mode), `arrow-up-down`, `corner-radius`, `select-pointer` | 14 px (`FG` idle, `CHROME_ACTIVE` equipped) |
   | Command palette rows | `resolve(command)`, before the label | 14 px |
   | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px (`FG` when selected, else `MUTED`) |
@@ -1091,7 +1092,7 @@ derivative is a different licensing question from shipping the file as FreeCAD d
   20 px in the radial wheel. A 24 × 24 px hit target for any icon-only control
   (WCAG 2.5.8, the same floor as `visual-language.md` §5).
 - **Labels** — icon + text is the default. Icon-only is allowed only where a tooltip
-  exists and the target is 24 px. The status line stays text.
+  exists and the target is 24 px. The action toast stays text.
 
 ### 6.4 What not to do
 
@@ -1160,7 +1161,7 @@ access and its matches are heuristic. The curated alias table is the contract.
    not chrome; the Draft set already ships through `mods/`. *Recommend yes.*
 5. **Key icons by command id + `Pixmap`.** Add `pixmap` to `CommandInfo` and
    `catalog.json`; do not invent a second id space. *Recommend yes.*
-6. **Icon + label everywhere except the title bar.** The status line stays text; the
+6. **Icon + label everywhere except the title bar.** The action toast stays text; the
    wheel keeps its tone arc. *Recommend yes.*
 
 ## 10. Open questions

@@ -357,7 +357,7 @@ impl Shell {
                 "tool: {}",
                 Slot::Fillet.status_label(self.gizmo_mode, kind)
             );
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             self.rearm_selection(cx);
             return;

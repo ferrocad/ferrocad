@@ -359,7 +359,9 @@ impl Shell {
     /// The registry is the authority; this is deliberately a pull so the shell never
     /// re-extracts or recompiles a scene whose overlay set is unchanged. Registration
     /// is enough to draw: the viewport does not gate the program queue on
-    /// `grid_overlay`, which only hides the native ground. With no
+    /// `grid_overlay`, which only hides the native ground. Each scene keeps the provider
+    /// feature that registered it, so the grid overlay is the one the viewport replays
+    /// on a candidate plane. With no
     /// viewport (headless, or before [`enable_viewport`](Self::enable_viewport)) the
     /// dirty flag is left set, so the next viewport applies it.
     pub(in crate::shell) fn sync_overlays(&mut self, cx: &mut Context<Self>) {
@@ -369,9 +371,9 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        let overlays = crate::stage_view::overlay_scenes();
+        let overlays = crate::stage_view::overlay_scenes_tagged();
         let error = viewport.update(cx, |viewport, cx| {
-            viewport.set_overlays(overlays);
+            viewport.set_overlays_tagged(overlays);
             cx.notify();
             viewport.take_shader_error()
         });
@@ -469,7 +471,7 @@ impl Shell {
         // The absolute fields are measured from the pivot, so a re-pivot re-reads it
         // (a pending move keeps its frozen `origin_0`).
         self.refresh_move_origin(cx);
-        self.model.lock().unwrap().status = format!("pivot: {}", snap_name(kind));
+        self.model.lock().unwrap().note_status(format!("pivot: {}", snap_name(kind)));
         cx.notify();
     }
 
@@ -1081,7 +1083,7 @@ impl Shell {
             self.display.object_of(commit.target).map(str::to_string)
         }) else {
             let status = format!("no document object for entity {}", commit.target);
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -1128,7 +1130,7 @@ impl Shell {
                 status
             }
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }
@@ -1186,7 +1188,7 @@ impl Shell {
         // Move form (or a previous stem) would clamp and hover against the wrong box.
         self.hud_rect = None;
         self.hud_lock = None;
-        self.model.lock().unwrap().status = format!("{label} pending — ✓ to apply, ✗ to discard");
+        self.model.lock().unwrap().note_status(format!("{label} pending — ✓ to apply, ✗ to discard"));
         cx.notify();
     }
 
@@ -1198,7 +1200,7 @@ impl Shell {
         }
         self.hud_rect = None;
         self.hud_lock = None;
-        self.model.lock().unwrap().status = "nothing to apply".to_string();
+        self.model.lock().unwrap().note_status("nothing to apply".to_string());
         cx.notify();
     }
 
@@ -1241,7 +1243,7 @@ impl Shell {
             return false;
         };
         self.pending_interaction = None;
-        self.model.lock().unwrap().status = format!("{label} discarded");
+        self.model.lock().unwrap().note_status(format!("{label} discarded"));
         self.hud_rect = None;
         self.hud_lock = None;
         self.rearm_selection(cx);
@@ -1273,7 +1275,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Result<[i32; 2], String> {
         let slot = crate::shell::panels::loadout::Slot::from_key(slot)
-            .ok_or_else(|| format!("no loadout slot called {slot:?} (0–3)"))?;
+            .ok_or_else(|| format!("no loadout slot called {slot:?} (1–4)"))?;
         self.activate_loadout_slot(slot, cx);
         let entity = self.display.entity_of(object).ok_or_else(|| {
             format!("{object} is not in the stage (consumed by a feature, or not drawn?)")
@@ -1620,7 +1622,7 @@ impl Shell {
         let delta = commit.values.first().copied().unwrap_or(0.0);
         let Some(viewport) = self.viewport.clone() else {
             let status = "workplane: no viewport".to_string();
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -1660,7 +1662,7 @@ impl Shell {
         } else {
             "the workplane offset is unchanged".to_string()
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }
@@ -1696,7 +1698,7 @@ impl Shell {
         });
         if let Some(label) = restored {
             let status = format!("workplane: {label}");
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
         }

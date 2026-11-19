@@ -7,7 +7,9 @@
 //! platform-neutral host (the browser) gets the same queue without linking CPython;
 //! this module is the shell's single import for them.
 
-pub use ferrocad_inventor::overlays::{dirty as overlays_dirty, take_scenes as overlay_scenes};
+pub use ferrocad_inventor::overlays::{
+    dirty as overlays_dirty, take_scenes_with_roles as overlay_scenes_tagged, OverlayScene,
+};
 pub use ferrocad_stage::view::{
     clear_previews, clear_view, has_stage, preview_generation, preview_items, publish_camera,
     publish_stage, publish_workplane, published_camera, published_face_frame,

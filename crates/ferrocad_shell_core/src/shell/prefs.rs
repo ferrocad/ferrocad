@@ -97,7 +97,7 @@ impl Shell {
             Ok(()) => status,
             Err(error) => format!("{status}; not saved: {error}"),
         };
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         // The rows this click changed are the card's own.
         self.refresh_settings_card(cx);

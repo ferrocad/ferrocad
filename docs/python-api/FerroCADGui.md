@@ -15,7 +15,7 @@ _`ViewState` is a read-only snapshot pushed by the shell._
 | --- | --- |
 | `activeProvider(feature)` | The active backend for ``feature``, or ``None`` when none is registered. |
 | `addDocumentListener(observer) -> None` | Register ``observer`` for document lifecycle notifications. |
-| `addOverlay(node) -> None` | Register a Coin node as a viewport overlay (FerroCAD extension). |
+| `addOverlay(node, role=None) -> None` | Register a Coin node as a viewport overlay (FerroCAD extension). |
 | `appearancePreset(feature: str)` | A copy of the declared preset for ``feature``, or ``None`` when none is. |
 | `appearancePresets() -> dict` | Every declared preset, ``{feature: {setting: value}}``, in declaration order. |
 | `appearanceView(feature=None) -> dict` | The ``{"view": …}`` request for the current appearance policy. |

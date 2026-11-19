@@ -12,7 +12,7 @@
 use std::f64::consts::TAU;
 use std::sync::Arc;
 
-use ferrocad_graphics::{Camera, Ray, ShaderProgram, screen_ribbon};
+use ferrocad_graphics::{Camera, Ray, ShaderProgram, screen_ribbon, theme};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::interaction::InteractionCommit;
@@ -62,10 +62,12 @@ pub const DISABLED_RING_ALPHA: f32 = 0.12;
 pub const GLASS_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 0.10];
 /// Glass plane while hovered.
 pub const GLASS_HIGHLIGHT: [f32; 4] = [0.040, 0.509, 0.939, 0.50];
-/// Push-pull stem (`#F59E0B`); reserved for the push-pull manipulator.
-pub const PUSH_PULL_COLOR: [f32; 4] = [0.913, 0.342, 0.003, 1.0];
-/// Subtractive preview (`#EF4444`); reserved for the push-pull manipulator.
-pub const SUBTRACT_COLOR: [f32; 4] = [0.863, 0.058, 0.058, 1.0];
+/// Push-pull stem (`#F59E0B`); reserved for the push-pull manipulator. The theme's
+/// [`ADDITIVE_INK`](ferrocad_theme::draw::ADDITIVE_INK).
+pub const PUSH_PULL_COLOR: [f32; 4] = theme::ADDITIVE_INK;
+/// Subtractive preview (`#EF4444`); reserved for the push-pull manipulator. The theme's
+/// [`SUBTRACTIVE_INK`](ferrocad_theme::draw::SUBTRACTIVE_INK).
+pub const SUBTRACT_COLOR: [f32; 4] = theme::SUBTRACTIVE_INK;
 
 /// The default rotation detent of the rings, in degrees.
 pub const DEFAULT_RING_SNAP_DEG: f64 = 15.0;

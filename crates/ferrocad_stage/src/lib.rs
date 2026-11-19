@@ -119,6 +119,7 @@ pub use interaction::{
 };
 pub use plane_points::PlanePointsTool;
 pub use interaction::box_tool::BoxTool;
+pub use interaction::primitive::{PrimitiveKind, PrimitiveTool};
 pub use rectangle::RectangleTool;
 pub use arc::ArcTool;
 pub use circle::CircleTool;

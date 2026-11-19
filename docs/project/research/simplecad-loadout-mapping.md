@@ -109,9 +109,10 @@ behaviour in that document's vocabulary (`WP` = workplane, `Face` = `+N` on the 
 
 | SimpleCAD | Add tool | Gate | Targets | Strip fields | Status |
 | --- | --- | --- | --- | --- | --- |
-| `Sphere` | `Sphere` | `SpatialHost` | `WP` → solid at the centre; `Face` → boss on `+N` | `R` | **rust** gesture, **hook** object (`Part::Sphere` is green); no hosted placement today |
+| `Sphere` | `Sphere` | `SpatialHost` | `WP` → solid at the centre; `Face` → boss on `+N` | `R` | **wired** as `Part_Sphere` → `PrimitiveTool`, centred on the click |
 | — | `Box` | `SpatialHost` | `WP`, `Face` | `W`, `L`, `H` | **wired** as `Part_Box` at the origin; the ghost/host is C4 |
-| — | `Cylinder`, `Cone`, `Torus` | `SpatialHost` | `WP`, `Face` | `R`, `H` / `R1`, `R2`, `H` / `R1`, `R2` | **hook** object; **rust** gesture |
+| — | `Cylinder`, `Cone` | `SpatialHost` | `WP`, `Face` | `R`, `H` / `R1`, `R2`, `H` | **wired** as `Part_Cylinder`/`Part_Cone` → `PrimitiveTool`; the base sits on the click and the axis is the placement frame's normal |
+| — | `Torus` | `SpatialHost` | `WP`, `Face` | `R1`, `R2` | **hook** object; **rust** gesture |
 | `Loft` | `Prism`'s siblings: `Loft` | `RequiresSelection { Wire ∣ Face, 2.. }` | profiles in order | — | **hook**: `document.operations.prepare_profiles` + `commit_form` |
 | `Sweep` | `Sweep` | `RequiresSelection { Wire ∣ Face, 2 }` (profile, then path) | profile along an edge | — | **hook**: same call pair, `mode="Sweep"` |
 | `Line` closing a loop | `Prism (Extrude)` | `RequiresSelection { Wire, 1 }` | profile → solid along `+N` | `H` | **wired** as `Part::Extrusion` through the sketch-pad path (`Sketch_Polyline` + `Sketch_Dimension`); a standalone Prism command does not exist yet |
@@ -276,7 +277,7 @@ Push/Pull, and the one SimpleCAD PICK tool whose whole gesture is "drag a distan
 | `ToolField` strip + `Tool::set_field` write-back; a **string** field for `3D Text` | `ToolStatus` is text-only today | **C2** |
 | The hover placement frame + 3D ghost on `WP`/`Face`/`Edge` (`ManipulatorFrame`, `GHOST_SURFACE_ALPHA`) | no `TargetHost` | **C4** |
 | `Face`-hosted **creation**: the commit must carry the host (object + face) so the provider can split/imprint | `InteractionCommit::creating()` has no target | **C4** |
-| `Arc2Point`, `Sphere`/`Cylinder`/`Cone`/`Torus`/`Mesh Box` placement gestures | no stage tool | new tools |
+| `Arc2Point`, `Torus`/`Mesh Box` placement gestures | no stage tool | new tools |
 | `Point` tool | trivial, but still a tool | new tool |
 | `Vertex` pick scope (`Select ▾`, `PickScope`) for `VertexMove` | `SelectFilter` is `Auto ∣ Body ∣ Face ∣ Edge` | new scope |
 | `3D Text` tool + string field | no tool, and the field kind does not exist | C2 + tool |
@@ -460,8 +461,9 @@ pointing, so the profile tools can draw on a face and the script can divide it.
   the first left press binds it as the session's placement. That is what makes the ghost,
   the preview and the commit one geometry rather than three re-derivations.
 - **The ghost is real geometry, at the token alpha.** Each drawing tool gained a third
-  fixed slot, `ghost_item(CURSOR_COLOR)`: `ShadedWithEdges`, surface alpha
-  `GHOST_SURFACE_ALPHA` (0.35), blended (no depth write), not selectable. Until the anchor
+  fixed slot, `ghost_item(CURSOR_COLOR)`: `ShadedWithEdges`, the **surface glass**
+  (`GLASS_TOP`/`GLASS_SHADE`, 35 % `GHOST_SURFACE_ALPHA`) with the cursor ink on its
+  perimeter, blended (no depth write), not selectable. Until the anchor
   is placed it holds a closed square in the placement plane
   (`HoverTarget::marker`), which is the honest preview when the drag has no extent yet.
 - **The drawing plane follows the face.** `DragFrame::in_plane` builds the drag frame in the
@@ -600,8 +602,9 @@ Three follow-ups from the live window:
   pill became a **create dock** in the bottom row, right after the Modify bar:
   `5 ⊕ Sketch: Rectangle ▾  6 ⊕ Solid: Box ▾  7 ⊕ Surface: Loft ▾  9 ⊕ Mesh: Mesh Box ▾`,
   one per registered category (a category with no tool is not a pill), permanently — there
-  is no create-dock toggle. The globals (`Undo`, `Redo`, `Fit`, Search) are a vertical
-  pill on the canvas' **left edge**, so the dock never holds a tool. Each pill
+  is no create-dock toggle. The globals (`Undo`/`Redo`/`Save`, `Fit`, Search) are split
+  between the title bar and the navigation cube, so the dock never holds a tool. Each
+  pill
   remembers its category's tool and leads with its key, as the Modify bar does — `5`–`9`
   are the Add hand's, continuing the Modify hand's `0`–`3` so one digit space addresses
   both hands (`4` is left unbound). A key press **selects** the pill and starts the tool
@@ -610,7 +613,9 @@ Three follow-ups from the live window:
   and skipping a tool the selection cannot use — the slot-with-variants shape Slot 1 has
   for Move ⇄ Rotate. The key never opens the menu. The flyout shows **one category at a
   time** behind a segmented header, with a tab click pointing the pill at the remembered
-  tool and a row click binding and running it. The rows carry `1`–`8` in their own column
+  tool and a row click binding and running it. *(The header is gone as of 2026-11-19: the
+  flyout is the opened pill's category, and browsing another is that pill's caret — one
+  control per decision.)* The rows carry `1`–`8` in their own column
   and those digits pick a row while the flyout is open (the panel owns the keyboard, as
   the wheel does), so a category is navigable without the pointer; the pill's caret reads
   `^` while its list is showing, and holding `Shift` peeks the equipped pill's list while
@@ -622,8 +627,9 @@ Three follow-ups from the live window:
   placed the anchor (the parameter tools too — `BoxTool` anchors on the press and only
   then offers its numbers). An armed tool that has placed nothing shows only its
   hover ghost, so arming reads as equipping a slot, not as opening a dialog. The column
-  grows upward and the canvas keeps its rectangle (`chrome::globals_dock` owns the left
-  column, `chrome::create_dock` the bottom row, `chrome::tool_pill` the row above it).
+  grows upward and the canvas keeps its rectangle (`chrome::document_controls` owns the
+  title group, the viewport owns `Fit`, `chrome::create_dock` the bottom row,
+  `chrome::tool_pill` the row above it).
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.
@@ -641,6 +647,40 @@ is the invariant it means to test.
 `ferrocad_simplecad` `chrome_surfaces` **6** (the profile gate and the `Surface` group);
 `run_tests.py --extension base` **718/0/0/8** and `--extension workbenches` **881/0/0/3**,
 unchanged; `--check-init` OK, `xtask editions --check` green.
+
+### Step 10 — the other solids join the Solid pill
+
+The Box tool was the only primitive with a gesture, so the wheel looked like SimpleCAD's and
+behaved like a fraction of it: `Cylinder`, `Sphere` and `Cone` were reachable by script
+(`Part::Cylinder` is green) but had no placement tool and no command at all.
+
+- **`ferrocad_stage::PrimitiveTool`** places all three. It is BoxTool's gesture — a press
+  anchors the base, the row's numbers are the input, `Enter`/the shared `✓` commits — with a
+  `PrimitiveKind` naming the solid: `R`,`H` for a cylinder, `R` for a sphere, `R1`,`R2`,`H`
+  for a cone (`R2 = 0` is a cone, any other pair a frustum; both at zero is refused). The
+  preview is one frustum-of-revolution generator (`revolve`) plus a UV sphere (`ball`), so
+  the three cannot drift, and the ghost is a read of the parameters rather than a second
+  source of truth.
+- **The axis travels with the commit.** A cylinder's base sits on the placement frame's
+  origin and its axis runs along the frame's **normal**, so a solid placed on a face grows
+  out of that face; the values end in `nx, ny, nz` and the hook builds the shape along it
+  (`Part.makeCylinder(..., dir=...)`). A sphere is isotropic and carries only its centre
+  (`[r, x, y, z]`).
+- **One command per shape, in the `Solid` tier.** `Part_Cylinder`, `Part_Sphere` and
+  `Part_Cone` share `_MakePrimitiveCommand` (the `Part_Box` prototype: `{"tool": …}`, no
+  immediate creation), so the Solid pill's flyout lists four primitives instead of one and
+  the tools are registered in `base_contributions()` beside `box`. The command ids were
+  already in the icon table, so each row carries its glyph.
+- **The finish pair is the shared pill.** The new tools publish `Tool::anchor` (the base, or
+  a sphere's centre), so the `✗`/`✓` decision pill floats beside the solid being placed,
+  the same control the Move form, a released manipulator and the Box tool use.
+
+Pinned by `ferrocad_stage`'s five `primitive` cases (parameters per kind, the write-back and
+refusals, the cone's two ends, cancel) and
+`ferrocad_parametric/tests/primitive_tools_round_trip.rs` (the commands arm the tools and
+write nothing, a typed radius/height is the committed object, the frame normal becomes a
+`+X` cylinder's axis, a sphere is centred, a frustum commits both radii, one undo removes
+each). `chrome_surfaces` now asserts all four `Solid` rows.
 
 ### Measured
 

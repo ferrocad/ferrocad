@@ -2,7 +2,7 @@
 //!
 //! One store, two views: the bottom-left bar and the header's `Select ▾` pill both
 //! write [`Loadout`]. The slot decides which control may arm — Slot 1 hosts the shared
-//! triad, Slots 2 and 3 host the selection's manipulator, and Slot 0 is Inspect:
+//! triad, Slots 2 and 3 host the selection's manipulator, and Slot 4 is Inspect:
 //! no handles, with the stage highlight previewing the filtered target — and the filter
 //! decides the [`SelectionRef`] the tree, the typed tool and the arm seam see, so a face
 //! click in Slot 1 selects the body.
@@ -97,13 +97,17 @@ pub(crate) enum Slot {
 }
 
 impl Slot {
-    /// The slot a `0`/`1`/`2`/`3` press equips.
+    /// The slot a `1`/`2`/`3`/`4` press equips.
+    ///
+    /// The four digits run in bar order — `1 Move`, `2 Push/Pull`, `3 Fillet`,
+    /// `4 Inspect` — and the create dock continues them with `5`–`9`, so the whole row is
+    /// one contiguous number line rather than a run interrupted by an out-of-place `0`.
     pub(crate) fn from_key(key: &str) -> Option<Self> {
         match key {
-            "0" => Some(Self::Inspect),
             "1" => Some(Self::Move),
             "2" => Some(Self::PushPull),
             "3" => Some(Self::Fillet),
+            "4" => Some(Self::Inspect),
             _ => None,
         }
     }
@@ -114,7 +118,7 @@ impl Slot {
             Self::Move => "1",
             Self::PushPull => "2",
             Self::Fillet => "3",
-            Self::Inspect => "0",
+            Self::Inspect => "4",
         }
     }
 
@@ -297,7 +301,7 @@ impl Shell {
                 .map(|status| status.label.clone())
                 .unwrap_or_else(|| "the tool".to_string());
             let status = format!("{label}: finish (Enter / ✓) or cancel (Esc) before you switch tools");
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return false;
@@ -336,7 +340,7 @@ impl Shell {
             "tool: {}",
             slot.status_label(self.gizmo_mode, self.loadout.dress_up())
         );
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }
@@ -346,7 +350,7 @@ impl Shell {
     /// Slot 1 hosts **both** hands, so pressing its key while it is equipped toggles
     /// **Move ⇄ Rotate**. Slot 3 hosts **both** dress-ups for the same reason: pressing
     /// `3` while it is equipped toggles **Fillet ⇄ Chamfer**, and the bar's label, icon
-    /// and the scrubber the factory builds all follow. Inspect is its own slot (`0`): it
+    /// and the scrubber the factory builds all follow. Inspect is its own slot (`4`): it
     /// keeps the selection, but drops the handles and the numeric surface. A switch to
     /// another slot, and the first press from one, go through
     /// [`set_loadout_slot`](Self::set_loadout_slot).
@@ -391,7 +395,7 @@ impl Shell {
                 "tool: {}",
                 Slot::Fillet.status_label(self.gizmo_mode, dress_up)
             );
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -408,7 +412,7 @@ impl Shell {
 
     /// Name the equipped hand in the status line.
     fn set_tool_status(&mut self, label: &str) {
-        self.model.lock().unwrap().status = format!("tool: {label}");
+        self.model.lock().unwrap().note_status(format!("tool: {label}"));
     }
 
     /// Push the active topology filter to the viewport's picker.
@@ -446,7 +450,7 @@ impl Shell {
                 self.armed_tool_label(),
                 gate.requirement()
             );
-            self.model.lock().unwrap().status = status.clone();
+            self.model.lock().unwrap().note_status(status.clone());
             self.console_line(status, cx);
             cx.notify();
             return;
@@ -459,7 +463,7 @@ impl Shell {
         self.sync_pick_scope(cx);
         self.rearm_selection(cx);
         let status = format!("select: {}", filter.label().to_lowercase());
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }

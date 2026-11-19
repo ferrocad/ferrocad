@@ -57,7 +57,7 @@
 use std::f64::consts::PI;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_graphics::Camera;
+use ferrocad_graphics::{Camera, theme};
 use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
@@ -484,9 +484,9 @@ impl DressUpScrubber {
         self.items[0].set_edge_color(outline);
         self.items[0].set_ghost_alpha(self.style.ghost_alpha);
         let preview = [
-            self.style.active[0],
-            self.style.active[1],
-            self.style.active[2],
+            theme::PREVIEW_INK[0],
+            theme::PREVIEW_INK[1],
+            theme::PREVIEW_INK[2],
             0.30,
         ];
         self.preview.set_surface_color(preview);
@@ -1113,6 +1113,11 @@ mod tests {
         assert!(scrubber.update(&camera));
         let narrow = band_width(&scrubber.preview_items()[0]);
         assert!(narrow > 0.0, "the swath is drawn at the current radius");
+        // The swath is a ghost too, so the creation and the modify previews share one
+        // perimeter ink instead of borrowing the manipulator's accent.
+        let ink = scrubber.preview_items()[0].surface_color();
+        assert_eq!(ink[..3], theme::PREVIEW_INK[..3]);
+        assert!((ink[3] - 0.30).abs() < 1e-6, "the swath keeps the preview alpha");
 
         scrubber.set_value(1.0);
         assert!(scrubber.update(&camera));

@@ -29,6 +29,7 @@ use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
 use crate::appearance_settings;
 use crate::grid_settings;
+use crate::theme_settings;
 use crate::{DocumentEngine, NoEngine};
 
 /// The commands the Rust half answers, whose ids the catalogue names once.
@@ -779,6 +780,9 @@ impl AppBackend for DocumentBackend {
             settings_nodes = script.extra_tree_nodes();
         }
         grid_settings::merge(&mut settings_nodes);
+        // The token table rides with the settings: it is read-only, but it is the answer
+        // to "which ink is that?" beside the rows that own the inks.
+        theme_settings::merge(&mut settings_nodes);
         tree.extend(settings_nodes);
         Ok(tree)
     }
@@ -830,7 +834,12 @@ impl AppBackend for DocumentBackend {
             return Ok(rows);
         }
         // Then this half's own synthetic nodes (the grid card), which exist precisely
-        // when no script claimed the namespace.
+        // when no script claimed the namespace. The theme card answers **before** the
+        // grid card because `grid_settings::rows` claims the whole `Settings/`
+        // namespace (it returns the empty list for a node it does not implement).
+        if let Some(rows) = theme_settings::rows(object) {
+            return Ok(rows);
+        }
         let view = self.state.borrow().view.clone();
         if let Some(rows) = grid_settings::rows(object, &view) {
             return Ok(rows);
@@ -1292,6 +1301,19 @@ impl AppBackend for DocumentBackend {
             }
             return Ok(result);
         }
+        // A token is a compile-time constant, so this card is read-only. Name the row
+        // that owns the ink where one does: "no setting GRID_INK on Settings/Theme"
+        // would hide the only place the user can go.
+        if theme_settings::is_node(object) {
+            return Ok(refused(match theme_settings::setting_for(property) {
+                Some(row) => format!(
+                    "{property} is a theme token, not a setting: it is the default for {row}. Edit that row"
+                ),
+                None => format!(
+                    "{property} is a theme token, not a setting: it is a constant in ferrocad_theme"
+                ),
+            }));
+        }
         // Then this half's grid card, whose store is the mirrored presentation state.
         let view = self.state.borrow().view.clone();
         if let Some(result) = grid_settings::write(object, property, value, &view) {
@@ -1469,7 +1491,10 @@ impl AppBackend for DocumentBackend {
             let verb = if hide { "hid" } else { "showed" };
             return Ok(CommandOutcome {
                 ok: true,
-                status: format!("{verb} {changed} object(s)"),
+                status: format!(
+                    "{verb} {changed} object{}",
+                    if changed == 1 { "" } else { "s" }
+                ),
                 ..Default::default()
             });
         }
@@ -1661,7 +1686,10 @@ impl AppBackend for DocumentBackend {
             Ok((moved, executed)) => Ok((
                 CommandOutcome {
                     ok: true,
-                    status: format!("moved {} object(s)", moved.len()),
+                    status: match moved.as_slice() {
+                        [one] => format!("moved {one}"),
+                        _ => format!("moved {} objects", moved.len()),
+                    },
                     ..Default::default()
                 },
                 Some(EditReport::new("Move", moved, Some(executed))),
@@ -2083,6 +2111,8 @@ fn document_node(name: &str, handle: &DocumentHandle, active: bool) -> DocumentN
                 type_id: object.type_id.clone(),
             })
             .collect(),
+        undo_names: document.undo_names(),
+        redo_names: document.redo_names(),
     }
 }
 
@@ -2333,6 +2363,8 @@ mod tests {
                 // A synthetic node, not a document: the shell never follows it.
                 active: false,
                 objects: Vec::new(),
+                undo_names: Vec::new(),
+                redo_names: Vec::new(),
             }]
         }
 
@@ -3542,6 +3574,53 @@ mod tests {
             .unwrap();
         assert!(!unknown.ok);
         assert!(!backend.evaluate("1 + 1").unwrap().ok);
+    }
+
+    /// The token table is a card in the tree: read-only, and a write names the row that
+    /// owns the ink instead of refusing into a dead end.
+    #[test]
+    fn the_theme_card_lists_the_tokens_and_refuses_a_write() {
+        let mut backend = DocumentBackend::new();
+        let tree = backend.model_tree().unwrap();
+        let settings = tree
+            .iter()
+            .find(|node| node.name == grid_settings::SETTINGS_ROOT)
+            .expect("the settings root");
+        assert!(
+            settings
+                .objects
+                .iter()
+                .any(|object| theme_settings::is_node(&object.name)),
+            "the theme rides with the settings: {settings:?}"
+        );
+
+        let rows = backend.properties(theme_settings::NODE).unwrap();
+        assert!(!rows.is_empty(), "the token rows: {rows:?}");
+        assert!(
+            rows.iter()
+                .all(|row| !row.editable && row.command.is_none()),
+            "every token row is read-only: {rows:?}"
+        );
+        let grid = rows
+            .iter()
+            .find(|row| row.name == "GRID_INK")
+            .expect("the grid ink");
+        assert_eq!(grid.value, "#94a3b8");
+        assert_eq!(grid.status, "grid + axis default");
+
+        let refused = backend
+            .set_property(theme_settings::NODE, "GRID_INK", "#000000")
+            .unwrap();
+        assert!(!refused.ok);
+        assert!(
+            refused.error.contains("Settings/Grid.color"),
+            "the refusal names the row that owns the ink: {}",
+            refused.error
+        );
+        // The theme check runs first but claims only its own node: the grid card still
+        // answers its rows.
+        let grid_rows = backend.properties(SETTINGS_GRID).unwrap();
+        assert!(grid_rows.iter().any(|row| row.name == "minor"));
     }
 
     /// The grid card's writes are presentation requests: the document half does not

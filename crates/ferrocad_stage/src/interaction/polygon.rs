@@ -206,6 +206,12 @@ impl Tool for PolygonTool {
         self.rebuild();
     }
 
+    fn anchor(&self) -> Option<Vector3> {
+        // The centre the shape grows around, else the placement the ghost sits on.
+        self.center
+            .or_else(|| self.hover.as_ref().map(|target| target.frame.origin))
+    }
+
     fn items(&self) -> &[ShapeItem] {
         &self.items
     }

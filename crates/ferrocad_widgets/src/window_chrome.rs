@@ -39,7 +39,7 @@ pub fn window_frame(
     title: impl Into<SharedString>,
     content: impl IntoElement,
 ) -> AnyElement {
-    window_frame_with_leading(window, title, None, content)
+    window_frame_with_title_controls(window, title, None, None, None, content)
 }
 
 /// Like [`window_frame`], with an optional element at the **leading** edge of the
@@ -59,27 +59,57 @@ pub fn window_frame_with_leading(
     leading: Option<AnyElement>,
     content: impl IntoElement,
 ) -> AnyElement {
+    window_frame_with_title_controls(window, title, leading, None, None, content)
+}
+
+/// Like [`window_frame_with_leading`], with optional **document actions** after the
+/// title (Undo/Redo/Save for the main window) and an optional **centred** element
+/// (the command search).
+///
+/// The actions belong beside the document's name because they act on that document,
+/// not on the viewport; the leading element (the app menu) is app-level chrome. On a
+/// platform that draws the window frame itself there is no client title bar, so the
+/// fallback bar carries the leading groups at its left and the centred element in the
+/// middle of the bar.
+pub fn window_frame_with_title_controls(
+    window: &mut Window,
+    title: impl Into<SharedString>,
+    leading: Option<AnyElement>,
+    controls: Option<AnyElement>,
+    center: Option<AnyElement>,
+    content: impl IntoElement,
+) -> AnyElement {
     let content = content.into_any_element();
     let Decorations::Client { tiling } = window.window_decorations() else {
-        let Some(leading) = leading else {
+        if leading.is_none() && controls.is_none() && center.is_none() {
             return content;
-        };
+        }
+        let mut left = div().flex().flex_row().items_center().gap_2();
+        if let Some(leading) = leading {
+            left = left.child(leading);
+        }
+        if let Some(controls) = controls {
+            left = left.child(controls);
+        }
+        // Equal flexible columns keep the centre element exactly centred in the bar.
+        let bar = div()
+            .id("leading-bar")
+            .debug_selector(|| "leading-bar".to_string())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .h(TITLE_BAR_HEIGHT)
+            .px_3()
+            .bg(rgb(TITLE_BG))
+            .child(div().flex_1().min_w_0().child(left))
+            .when_some(center, |bar, center| bar.child(center))
+            .child(div().flex_1());
         return div()
             .flex()
             .flex_col()
             .size_full()
-            .child(
-                div()
-                    .id("leading-bar")
-                    .debug_selector(|| "leading-bar".to_string())
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .h(TITLE_BAR_HEIGHT)
-                    .px_3()
-                    .bg(rgb(TITLE_BG))
-                    .child(leading),
-            )
+            .child(bar)
             .child(div().flex_1().min_h_0().child(content))
             .into_any_element();
     };
@@ -96,7 +126,12 @@ pub fn window_frame_with_leading(
         .flex()
         .flex_col()
         .size_full()
-        .child(title_bar(title.into(), leading))
+        .child(title_bar_with_controls(
+            title.into(),
+            leading,
+            controls,
+            center,
+        ))
         // The content fills the space left below the title bar.
         .child(div().flex_1().min_h_0().child(content));
 
@@ -181,6 +216,22 @@ fn framed_content_height(
 /// A leading control that handles its own clicks must stop mouse-down propagation,
 /// or the drag handler would also start a window move (the shell's app menu does).
 pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) -> impl IntoElement {
+    title_bar_with_controls(title, leading, None, None)
+}
+
+/// The title bar with optional groups around the title.
+///
+/// `leading` is app-level chrome (the app menu), `controls` are the verbs that act on
+/// the document named by `title`, and `center` is a window-wide entry point (the
+/// command search) that is centred between them and the window buttons. `leading`,
+/// `controls` and `center` must stop mouse-down propagation so the bar's drag handler
+/// does not swallow their clicks.
+pub fn title_bar_with_controls(
+    title: impl Into<SharedString>,
+    leading: Option<AnyElement>,
+    controls: Option<AnyElement>,
+    center: Option<AnyElement>,
+) -> impl IntoElement {
     let mut label = div().flex().flex_row().items_center().gap_2();
     if let Some(leading) = leading {
         label = label.child(leading);
@@ -191,8 +242,11 @@ pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) ->
             .text_color(rgb(TITLE_FG))
             .child(title.into()),
     );
+    if let Some(controls) = controls {
+        label = label.child(controls);
+    }
 
-    let controls = div()
+    let window_controls = div()
         .flex()
         .flex_row()
         .items_center()
@@ -221,7 +275,6 @@ pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) ->
         .flex()
         .flex_row()
         .items_center()
-        .justify_between()
         .h(TITLE_BAR_HEIGHT)
         .px_3()
         .bg(rgb(TITLE_BG))
@@ -234,8 +287,17 @@ pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) ->
                 window.show_window_menu(event.position());
             }
         })
-        .child(label)
-        .child(controls)
+        // Equal flexible columns keep the centre element exactly centred in the bar.
+        .child(div().flex_1().min_w_0().child(label))
+        .when_some(center, |bar, center| bar.child(center))
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_row()
+                .justify_end()
+                .child(window_controls),
+        )
 }
 
 fn control_button(

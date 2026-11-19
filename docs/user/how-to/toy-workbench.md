@@ -80,7 +80,9 @@ tree = json.loads(ferrocad_shell.model_tree())
         "name": "Slab",
         "type": "App::FeaturePython"
       }
-    ]
+    ],
+    "redo_names": [],
+    "undo_names": []
   }
 ]
 ```
@@ -222,7 +224,7 @@ wide_eye = [
 
 ![The Toy edition window with the Wide slab beside the sample slab](../images/toy-workbench-window.png)
 
-*The same document opened in the Toy edition. The viewport draws both slabs, the header carries the workbench's controls, and the dock is the shell's own chrome rather than the workbench's.*
+*The same document opened in the Toy edition. The viewport draws both slabs, the header carries the workbench's environment controls, and the shell's own chrome around it is not the workbench's.*
 
 ## 7. Undo the manipulation
 

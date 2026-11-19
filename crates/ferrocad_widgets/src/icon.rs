@@ -87,6 +87,8 @@ const ASSETS: &[(&str, &[u8])] = &[
     ("snap", SNAP_SVG),
     ("menu", include_bytes!("../assets/icons/menu.svg")),
     ("search", include_bytes!("../assets/icons/search.svg")),
+    ("undo", include_bytes!("../assets/icons/undo.svg")),
+    ("redo", include_bytes!("../assets/icons/redo.svg")),
     (
         "folder-open",
         include_bytes!("../assets/icons/folder-open.svg"),

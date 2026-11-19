@@ -1,7 +1,8 @@
 //! Where every command lives: the dock contract, the pill, the wheel and Search.
 //!
-//! The action dock is **one strip**: `[ Undo  Redo  Fit │ ⊕ <Tool> ▾ │ Search ]`. It is
-//! not a toolbar, so a creation tool declares `FerroCAD_Surface: "creation"` (the pill's
+//! The globals are **split by role**: `Undo`/`Redo` in the title bar, `Fit` beside the
+//! navigation cube, and Search centred in the title bar. They are not a toolbar, so a
+//! creation tool declares `FerroCAD_Surface: "creation"` (the pill's
 //! flyout) and a shape verb declares `"radial"` (a context wheel wedge) or `"palette"`
 //! (Search only). This test reads the same `commands()` JSON the shell builds its chrome
 //! from, so a command that drifts back onto the dock fails here rather than being found
@@ -117,8 +118,8 @@ fn the_dock_is_the_globals_and_nothing_else() {
     boot();
     let registry = registry();
 
-    // The strict contract: three globals. The pill and Search are shell chrome, built
-    // by the dock itself, so they are not registry rows.
+    // The strict contract: three globals. The header and Search are shell chrome,
+    // built by the shell itself, so they are not registry rows.
     assert_eq!(
         with_surface(&registry, "dock"),
         vec![
@@ -200,9 +201,11 @@ fn the_creation_tools_are_pill_rows_with_a_category() {
         assert_eq!(surface(&registry, id), "creation", "{id}");
         assert_eq!(category(&registry, id), "Sketch", "{id}");
     }
-    // The primitive the pill defaults to, and the two drawn profiles.
-    assert_eq!(surface(&registry, "Part_Box"), "creation");
-    assert_eq!(category(&registry, "Part_Box"), "Solid");
+    // The primitives the Solid pill holds, and the two drawn profiles.
+    for id in ["Part_Box", "Part_Cylinder", "Part_Sphere", "Part_Cone"] {
+        assert_eq!(surface(&registry, id), "creation", "{id}");
+        assert_eq!(category(&registry, id), "Solid", "{id}");
+    }
     for id in ["Part_Polyline", "Sketch_Polyline"] {
         assert_eq!(surface(&registry, id), "creation", "{id}");
         assert_eq!(category(&registry, id), "Sketch", "{id}");

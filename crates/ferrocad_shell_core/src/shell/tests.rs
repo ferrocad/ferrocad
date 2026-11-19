@@ -314,26 +314,34 @@ fn click_at(cx: &mut VisualTestContext, selector: &'static str) {
     cx.simulate_click(bounds.center(), gpui::Modifiers::default());
 }
 
-/// A window whose whole content is the production title bar, so the shell's app
-/// menu can be clicked in a headless test (test windows report server-side
-/// decorations, so no window frame draws chrome).
+/// A window whose whole content is the production title bar, so the shell's app menu
+/// and document actions can be clicked in a headless test (test windows report
+/// server-side decorations, so no window frame draws chrome).
 struct TitleBarHarness {
     shell: Entity<Shell>,
 }
 
 impl Render for TitleBarHarness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let leading = self.shell.update(cx, |shell, cx| {
+        let (leading, document, search) = self.shell.update(cx, |shell, cx| {
             let model = shell.snapshot();
-            crate::chrome::app_menu(
+            let leading = crate::chrome::app_menu(
                 shell.popover_open("app"),
                 &model,
                 shell.dev_tools_open(cx),
                 cx,
             )
-            .into_any_element()
+            .into_any_element();
+            let document = crate::chrome::document_controls(&model, false, cx).into_any_element();
+            let search = crate::chrome::search_pill(cx).into_any_element();
+            (leading, document, search)
         });
-        ferrocad_widgets::window_chrome::title_bar("FerroCAD", Some(leading))
+        ferrocad_widgets::window_chrome::title_bar_with_controls(
+            "FerroCAD",
+            Some(leading),
+            Some(document),
+            Some(search),
+        )
     }
 }
 
@@ -416,3 +424,4 @@ mod files;
 mod loadout;
 mod manipulator_finish;
 mod tool_fields;
+mod status;

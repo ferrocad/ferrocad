@@ -502,6 +502,71 @@ fn a_gpu_panel_row_persists_the_choice(cx: &mut TestAppContext) {
     write_gpu_preference("auto");
 }
 
+/// The token table is a tree node: the Settings root lists `Settings/Theme`, and
+/// opening it fills the card from the constants, read-only.
+///
+/// The tree is the one place a dev looks for "what is `GRID_INK` actually?", which
+/// used to mean a grep through three crates. A token is a compile-time constant, so the
+/// card is a reference: the value is the sRGB hex the token was authored from, and the
+/// chip names the ink.
+#[gpui::test]
+fn the_settings_tree_lists_the_theme_and_its_card_is_read_only(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    let listed = model
+        .lock()
+        .unwrap()
+        .tree
+        .iter()
+        .find(|node| node.name == "Settings")
+        .is_some_and(|node| {
+            node.objects
+                .iter()
+                .any(|object| object.name == "Settings/Theme")
+        });
+    assert!(listed, "the token table rides with the settings nodes");
+
+    shell.update(&mut cx, |shell, cx| {
+        shell.open_settings_card("Settings/Theme", cx)
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let rows = shell.read_with(&cx, |shell, _| {
+        shell
+            .settings_card
+            .as_ref()
+            .expect("the card opened")
+            .rows
+            .clone()
+    });
+    let grid = rows
+        .iter()
+        .find(|row| row.name == "GRID_INK")
+        .expect("the grid ink");
+    assert_eq!(grid.value, "#94a3b8");
+    assert_eq!(grid.status, "grid + axis default");
+    assert!(
+        rows.iter().all(|row| !row.editable),
+        "every token row is a reference, not an editor"
+    );
+    assert!(
+        cx.debug_bounds("prop-Settings/Theme.GRID_INK").is_none(),
+        "a read-only row seeds no text field"
+    );
+}
+
 /// P0.5/D4: `Dev_ToggleTools` is registered and its headless path reports a status
 /// instead of pretending a window exists.
 #[gpui::test]

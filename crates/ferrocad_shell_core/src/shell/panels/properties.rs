@@ -98,7 +98,7 @@ impl Shell {
             Ok(result) => format!("property error: {}", result.error),
             Err(e) => format!("property error: {e}"),
         };
-        self.model.lock().unwrap().status = status;
+        self.model.lock().unwrap().note_status(status);
         cx.notify();
     }
 

@@ -42,7 +42,7 @@
 //! This module is pure presentation: no `pyo3`, no kernel, no document.
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_graphics::Camera;
+use ferrocad_graphics::{Camera, theme};
 use ferrocad_stage::DressUpKind;
 use ferrocad_stage::gizmo::{
     GizmoHandle, GizmoStyle, GizmoValue, ManipulatorFrame, TransformGizmo, MIN_HIT_RADIUS_PX,
@@ -567,10 +567,13 @@ impl PushPullStem {
 
         self.preview
             .set_shape(positions, Vec::new(), triangles, Vec::new());
+        // The preview is a **ghost**, not an operation badge: it takes the one preview
+        // token, so the creation and the modify ghosts read as the same kind of thing.
+        // The stem below keeps the additive accent, which is what names the operation.
         let color = [
-            PUSH_PULL_COLOR[0],
-            PUSH_PULL_COLOR[1],
-            PUSH_PULL_COLOR[2],
+            theme::PREVIEW_INK[0],
+            theme::PREVIEW_INK[1],
+            theme::PREVIEW_INK[2],
             // A volume overlaps itself in most views; a plane's alpha would stack into mud.
             0.20,
         ];
@@ -1353,6 +1356,11 @@ mod tests {
         assert!(change.distance.abs() > 1e-9);
 
         let ghost = &stem.preview_items()[0];
+        // The swept volume is a ghost: it takes the one preview ink, while the stem above
+        // keeps the additive accent that names the operation.
+        let ink = ghost.surface_color();
+        assert_eq!(ink[..3], theme::PREVIEW_INK[..3]);
+        assert!((ink[3] - 0.20).abs() < 1e-6, "the swept volume stays light");
         let positions = ghost.positions();
         // The face's six vertices twice: the profile it starts from and the same profile
         // at the pending depth. The walls between them are what make it a volume.

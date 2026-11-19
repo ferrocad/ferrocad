@@ -18,6 +18,9 @@ documentation = "https://docs.rs/ferrocad_shell_doc"
 ferrocad_core.workspace = true
 # The interaction vocabulary a manipulator commit arrives in.
 ferrocad_stage.workspace = true
+# The token table the viewport draws with. A leaf crate: no gpui, no wgpu, no kernel,
+# and it is already in this half's graph through `ferrocad_stage`.
+ferrocad_theme.workspace = true
 # The seam and the command catalogue. Both are pure crates: no gpui, no CPython.
 ferrocad_shell_api.workspace = true
 # The Move form's values arrive as JSON, where they would arrive from Python.

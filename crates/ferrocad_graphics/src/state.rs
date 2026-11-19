@@ -616,6 +616,16 @@ pub struct StateSnapshot {
     /// of relying on MSAA coverage alone. Normal surfaces leave this false and keep
     /// `fs_main`.
     pub ribbon: bool,
+    /// Whether the draw is a screen-space **point sprite**: a quad whose four vertices
+    /// share one position and carry their corner in `uv`, which the vertex stage expands
+    /// to a fixed number of device pixels (`vs_sprite`).
+    ///
+    /// The size is *not* part of the geometry, and that is the point: a dot field built
+    /// from world-sized quads has to be rebuilt whenever the camera moves (its width is
+    /// derived from the projection) and every mark foreshortens with depth. A sprite is
+    /// the same mark at every depth, and the mesh stays valid across an orbit. Mutually
+    /// exclusive with [`ribbon`](Self::ribbon).
+    pub sprite: bool,
     /// The shader program that owns shading for this draw, if any.
     ///
     /// Scene-graph producers set this from an active `SoShaderProgram`; a renderer
@@ -636,6 +646,7 @@ impl Default for StateSnapshot {
             depth: DepthState::default(),
             pickable: true,
             ribbon: false,
+            sprite: false,
             program: None,
         }
     }

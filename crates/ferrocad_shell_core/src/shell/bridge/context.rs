@@ -181,7 +181,7 @@ impl Shell {
             | InteractionContext::Selection
             | InteractionContext::Idle => format!("not now — {verb}"),
         };
-        self.model.lock().unwrap().status = status;
+        self.model.lock().unwrap().note_status(status);
         cx.notify();
         true
     }
@@ -217,7 +217,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let status = format!("{label}: {requirement}");
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }

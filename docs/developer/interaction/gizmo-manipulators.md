@@ -304,7 +304,7 @@ stateDiagram-v2
   is click-to-focus in the docked row, like a tape ruler tag; it hides below a 28 px chord.
 - **A workbench manipulator's release is the same kind of decision (A4, 2026-11-13).** A
   stem or a scrubber reports its `InteractionCommit` on release, and the shell **holds**
-  it instead of writing it: the preview stays at the pending value, the status line names
+  it instead of writing it: the preview stays at the pending value, the status toast names
   it, and the same `✗`/`✓` pair — beside the dimension pill, since a manipulator has no
   triad — spends it. `✓`/`Enter` calls the app script's `interaction` hook once (one
   transaction); `✗`/`Esc` re-arms the handle at rest and writes nothing. A pick, a hand
@@ -1222,7 +1222,7 @@ past half the thin extent. The tessellation says where the surface is, not where
 runs out; only the kernel knows that.
 
 When a hard bound actually clamps a typed value, the shell rewrites the focused field to
-what the manipulator took and the status line already names the accepted number, so the
+what the manipulator took and the status toast already names the accepted number, so the
 row and the ghost can never disagree. A value that was accepted as typed is left alone —
 rewriting `7.5` to `7.50` mid-word would fight the caret.
 

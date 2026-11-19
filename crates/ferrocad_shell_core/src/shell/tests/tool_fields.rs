@@ -79,7 +79,7 @@ fn the_armed_box_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) 
     let mut cx = VisualTestContext::from_window(window.into(), cx);
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
     draw(&mut cx);
-    let dock = cx.debug_bounds("globals-dock").expect("the idle dock");
+    let header = cx.debug_bounds("viewport-header").expect("the idle header");
     let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
     assert!(cx.debug_bounds("tool-strip").is_none());
 
@@ -111,12 +111,12 @@ fn the_armed_box_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) 
     place_the_box_anchor(&model);
     draw(&mut cx);
 
-    // The row is **added** to the column, not swapped for anything: the globals dock
-    // keeps its place on the left edge and the bottom row keeps both hands.
+    // The row is **added** to the column, not swapped for anything: the header keeps
+    // its globals and the bottom row keeps both hands.
     assert!(cx.debug_bounds("tool-strip").is_some(), "the completion row");
     assert!(
-        cx.debug_bounds("globals-dock").is_some(),
-        "the dock stays: activating a tool does not take the chrome away"
+        cx.debug_bounds("viewport-header").is_some(),
+        "the header stays: activating a tool does not take the chrome away"
     );
     assert!(cx.debug_bounds("tool-fields").is_some(), "the numeric row is docked");
     for field in ["w", "l", "h"] {
@@ -126,11 +126,18 @@ fn the_armed_box_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) 
             "the {field} field is painted"
         );
     }
-    // The dock does not move, the completion row sits directly above the hands' bar sharing
-    // its left edge, and the canvas rectangle is untouched.
-    let dock_after = cx.debug_bounds("globals-dock").expect("the dock");
-    assert_eq!(dock_after.origin.y, dock.origin.y, "the dock does not move");
-    assert_eq!(dock_after.center().x, dock.center().x, "and keeps its centre");
+    // The creation field is the same 28 px boxed input as the transform forms, not a
+    // bare text run.
+    let field_box = cx.debug_bounds("tool-field-w-box").expect("the boxed field");
+    assert_eq!(
+        field_box.size.height,
+        px(28.),
+        "the creation input matches the transform input's height"
+    );
+    // The header does not move, the completion row sits directly above the hands' bar
+    // sharing its left edge, and the canvas rectangle is untouched.
+    let header_after = cx.debug_bounds("viewport-header").expect("the header");
+    assert_eq!(header_after.origin, header.origin, "the header does not move");
     let strip = cx.debug_bounds("tool-strip").expect("the completion row");
     let loadout = cx.debug_bounds("loadout-bar").expect("the hands' bar");
     assert_eq!(strip.origin.x, loadout.origin.x, "same left edge as the hands");
@@ -194,6 +201,24 @@ fn tab_and_a_digit_resize_the_armed_boxes_fields(cx: &mut TestAppContext) {
     assert!(
         shell.read_with(&cx, |shell, _| shell.active_tool.is_some()),
         "the first Esc only drops the field"
+    );
+}
+
+/// A click on a creation field's box focuses it, exactly as a click on a transform
+/// field does; the typed value then seeds from the tool's own number.
+#[gpui::test]
+fn a_click_focuses_a_creation_field(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = box_window(cx);
+
+    click_at(&mut cx, "tool-field-l-box");
+    draw(&mut cx);
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell
+            .tool_field_edit()
+            .map(|edit| (edit.index, edit.text.clone()))),
+        Some((1, "20.00".to_string())),
+        "the clicked field owns the keyboard and starts from the tool's value"
     );
 }
 
@@ -313,8 +338,9 @@ fn a_pending_move_refuses_a_creation_tool_and_dims_the_dock(cx: &mut TestAppCont
     );
     let status = shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone());
     assert!(status.contains("move pending"), "{status}");
-    // The dock is dimmed and inert, not a second live surface under the pending move.
-    assert!(cx.debug_bounds("globals-dock").is_some());
+    // The title-bar document actions are dimmed and inert, not a second live surface
+    // under the pending move.
+    assert!(cx.debug_bounds("title-App_Undo").is_some());
     assert!(cx.debug_bounds("tool-strip").is_none());
 }
 
@@ -338,8 +364,8 @@ fn pill_hold_is_decoration_not_a_context(cx: &mut TestAppContext) {
     });
     assert!(!refused, "PILL_HOLD gates no action");
     assert!(
-        cx.debug_bounds("globals-dock").is_some(),
-        "the dock is live during the hold"
+        cx.debug_bounds("title-App_Undo").is_some(),
+        "the document actions are live during the hold"
     );
 
     // It expires on its own (the design's timeout), and expiring changes nothing else.

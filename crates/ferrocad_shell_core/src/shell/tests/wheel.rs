@@ -2,10 +2,12 @@
 
 use super::*;
 
-/// T3: the globals dock is a column on the canvas' left edge, lists the dock surface, and
-/// its rows follow `IsActive` while staying visible when disabled.
+/// T3: the chrome splits by what each control acts on. Document actions
+/// (`Undo`/`Redo`/`Save`) sit in the title bar beside the document's name, Search is
+/// a pill centred in the title bar, and the environment toggles keep the
+/// canvas' top-left. The object verbs stay in the radial wheel.
 #[gpui::test]
-fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
+fn the_chrome_splits_document_view_and_environment_controls(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let window = cx.update(|cx| {
@@ -19,55 +21,83 @@ fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
     draw(&mut cx);
 
-    let size = cx.update(|window, _| window.viewport_size());
-    let dock = cx.debug_bounds("globals-dock").expect("the dock");
+    // The floating card is gone.
     assert!(
-        dock.origin.x < size.width * 0.2,
-        "the dock is on the left edge (at {:?})",
-        dock.origin.x
+        cx.debug_bounds("globals-dock").is_none(),
+        "the floating globals card is gone"
     );
-    let centre = dock.center().y;
+
+    // Document actions live in the title-bar chrome, in Undo/Redo/Save order. The test
+    // window reports server decorations, so the frame's leading-bar fallback carries
+    // them at the same visual level the client title bar does.
+    let undo = cx.debug_bounds("title-App_Undo").expect("Undo");
+    let redo = cx.debug_bounds("title-App_Redo").expect("Redo");
+    let save = cx.debug_bounds("title-App_Save").expect("Save");
     assert!(
-        centre > size.height * 0.3 && centre < size.height * 0.7,
-        "the dock is centred down the edge (at {centre:?}, height {:?})",
-        size.height
-    );
-    assert!(
-        dock.size.height > dock.size.width / 2.0,
-        "it is a column, not a strip ({dock:?})"
-    );
-    // The rows stack down the edge in one column rather than running across it.
-    let undo = cx.debug_bounds("dock-App_Undo").expect("Undo");
-    let fit = cx.debug_bounds("dock-App_Fit").expect("Fit");
-    assert!(
-        undo.origin.y < fit.origin.y,
-        "the globals stack down (undo {undo:?}, fit {fit:?})"
-    );
-    assert_eq!(undo.origin.x, fit.origin.x, "in one column");
-    assert!(
-        cx.debug_bounds("dock-App_Delete").is_none(),
-        "object verbs left the dock for the radial menu"
+        undo.origin.x < redo.origin.x && redo.origin.x < save.origin.x,
+        "the document actions run Undo, Redo, Save"
     );
     assert!(
-        cx.debug_bounds("dock-App_Move").is_none(),
-        "object verbs left the dock for the radial menu"
-    );
-    assert!(cx.debug_bounds("dock-search").is_some());
-    // The dock is a command strip, so its glyphs come from the curated table; the
-    // Search entry is the one glyph this harness can prove (it links no workbench,
-    // so it registers no creation verbs).
-    assert!(
-        cx.debug_bounds("dock-search-icon").is_some(),
-        "the search entry carries a magnifier"
+        cx.debug_bounds("title-App_Delete").is_none(),
+        "object verbs left the chrome for the radial menu"
     );
     assert!(
-        cx.debug_bounds("dock-GizmoOverlay_Settings").is_none(),
-        "the native gizmo settings are dev-only and must not be on the dock"
+        cx.debug_bounds("title-App_Move").is_none(),
+        "object verbs left the chrome for the radial menu"
     );
     assert!(
-        cx.debug_bounds("dock-GizmoOverlayShader_Settings").is_none(),
-        "the shader gizmo settings are dev-only and must not be on the dock"
+        cx.debug_bounds("title-App_Fit").is_none(),
+        "Fit is a view verb: it lives beside the navicube, not with the document actions"
     );
+    assert!(
+        cx.debug_bounds("title-GizmoOverlay_Settings").is_none(),
+        "dev-only gizmo settings never reach the title actions"
+    );
+
+    // The compact actions carry no redundant labels.
+    assert!(cx.debug_bounds("title-App_Undo-icon").is_some());
+    assert!(cx.debug_bounds("title-App_Redo-icon").is_some());
+    assert!(cx.debug_bounds("title-App_Save-icon").is_some());
+
+    // Search is centred in the title chrome and outside the environment cluster. The
+    // test window reports server decorations, so the title chrome is the fallback
+    // leading bar.
+    let bar = cx.debug_bounds("leading-bar").expect("the title bar");
+    let header = cx.debug_bounds("viewport-header").expect("the environment header");
+    let search = cx.debug_bounds("header-search").expect("Search");
+    assert!(
+        bar.contains(&search.center()),
+        "Search is in the title chrome (search {:?}, bar {:?})",
+        search.center(),
+        bar
+    );
+    assert!(
+        (search.center().x - bar.center().x).abs() < px(2.),
+        "Search sits at the horizontal centre of the title chrome (search {:?}, bar {:?})",
+        search.center(),
+        bar.center()
+    );
+    assert!(
+        !header.contains(&search.center()),
+        "Search is not part of the environment controls"
+    );
+    assert!(
+        cx.debug_bounds("header-search-icon").is_some(),
+        "the search pill carries a magnifier"
+    );
+
+    // The environment toggles keep the top-left, and none of the document actions or
+    // Search is inside their header.
+    let grid = cx.debug_bounds("grid-label").expect("the Grid label");
+    assert!(header.contains(&grid.center()));
+    for selector in ["title-App_Undo", "title-App_Redo", "title-App_Save", "header-search"] {
+        let bounds = cx.debug_bounds(selector).expect(selector);
+        assert!(
+            !header.contains(&bounds.center()),
+            "{selector} is not in the environment header"
+        );
+    }
+
     assert!(
         !dock_enabled(&model, "App_Delete"),
         "nothing is selected yet"
@@ -117,7 +147,7 @@ fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("radial-wheel").is_none(), "the wheel closed");
 
     // The Search slot opens the command palette.
-    click_at(&mut cx, "dock-search");
+    click_at(&mut cx, "header-search");
     draw(&mut cx);
     assert!(
         shell.read_with(&cx, |shell, _| shell.palette.is_some()),
@@ -408,10 +438,11 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    // The globals, the single Create Dock toggle and Search are the dock's controls; the
-    // tool, the verb and the pills are not.
-    assert!(cx.debug_bounds("dock-App_Undo").is_some());
-    assert!(cx.debug_bounds("dock-App_Fit").is_some());
+    // The document actions are title-bar chrome and Search is centred over the canvas;
+    // the tool, the verb and the pills are not controls at all.
+    assert!(cx.debug_bounds("title-App_Undo").is_some());
+    assert!(cx.debug_bounds("title-App_Fit").is_none());
+    assert!(cx.debug_bounds("header-App_Undo").is_none());
     assert!(
         cx.debug_bounds("dock-create-toggle").is_none(),
         "the create dock is permanent: nothing in the chrome folds it away"
@@ -426,18 +457,18 @@ for _id, _command in (
         "the Solid pill is in the strip"
     );
     assert!(
-        cx.debug_bounds("dock-Test_CreationProbe").is_none(),
-        "a creation tool is not a dock button"
+        cx.debug_bounds("title-Test_CreationProbe").is_none(),
+        "a creation tool is not a title action"
     );
     assert!(
-        cx.debug_bounds("dock-Test_FaceProbe").is_none(),
-        "a face verb is not a dock button"
+        cx.debug_bounds("title-Test_FaceProbe").is_none(),
+        "a face verb is not a title action"
     );
-    assert!(cx.debug_bounds("dock-search").is_some());
+    assert!(cx.debug_bounds("header-search").is_some());
 
     // One bottom row, read left to right: the Modify hand's bar and then the Add hand's
-    // pills, which is what "one digit space" means on screen. The globals dock is the
-    // column on the left edge and must not sit on either of them.
+    // pills, which is what "one digit space" means on screen. The header is the pill at
+    // the top and must not sit on either of them.
     let strip = cx.debug_bounds("create-dock").expect("the strip");
     let loadout = cx.debug_bounds("loadout-bar").expect("the hand column");
     assert!(
@@ -449,13 +480,16 @@ for _id, _command in (
         loadout.center().y,
         "and share its baseline: one row, two hands"
     );
-    let dock = cx.debug_bounds("globals-dock").expect("the dock");
+    let header = cx.debug_bounds("viewport-header").expect("the header");
     for bar in [strip, loadout] {
-        let intersect = dock.origin.x < bar.origin.x + bar.size.width
-            && bar.origin.x < dock.origin.x + dock.size.width
-            && dock.origin.y < bar.origin.y + bar.size.height
-            && bar.origin.y < dock.origin.y + dock.size.height;
-        assert!(!intersect, "the dock clears the bottom row ({dock:?} / {bar:?})");
+        let intersect = header.origin.x < bar.origin.x + bar.size.width
+            && bar.origin.x < header.origin.x + header.size.width
+            && header.origin.y < bar.origin.y + bar.size.height
+            && bar.origin.y < header.origin.y + header.size.height;
+        assert!(
+            !intersect,
+            "the header clears the bottom row ({header:?} / {bar:?})"
+        );
     }
 
     // The caret opens the category flyout: the creation tool is a row, the verb is not.
@@ -463,8 +497,8 @@ for _id, _command in (
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_some(), "the flyout opened");
     assert!(
-        cx.debug_bounds("create-tabs").is_some(),
-        "the flyout has a category header"
+        cx.debug_bounds("create-tabs").is_none(),
+        "the flyout has no category header: the pills above it are the categories"
     );
     assert!(cx.debug_bounds("create-row-Test_CreationProbe").is_some());
     assert!(
@@ -860,12 +894,12 @@ fn backspace_dismisses_the_root_ring(cx: &mut TestAppContext) {
 
 /// The create dock is **one pill per category**, each remembering its own tool.
 ///
-/// A pill reads `5 ⊕ <Category>: <Tool> ▾`: the left half arms it, the caret opens the
-/// flyout, and the flyout's segmented header shows one category at a time. Picking a
-/// tool **binds** it to its category and **runs** it — the same pair of actions a wheel
-/// flick performs — while clicking a tab only points the pill at what that category
-/// remembers. The keys `5`–`9` are the loadout's: a press arms the pill's tool and a
-/// press on the equipped pill steps to the next tool of that category.
+/// A pill reads `5 ⊕ <Category>: <Tool> ▾`: the left half arms it and the caret opens
+/// **that category's** flyout — no tab bar, because the row of pills already is the
+/// category choice. Picking a tool **binds** it to its category and **runs** it — the
+/// same pair of actions a wheel flick performs. The keys `5`–`9` are the loadout's: a
+/// press arms the pill's tool and a press on the equipped pill steps to the next tool of
+/// that category.
 #[gpui::test]
 fn each_creation_pill_remembers_its_own_tool(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -932,37 +966,37 @@ for _id, _command in (
         "a fresh session has armed nothing"
     );
 
-    // The flyout has a tab per registered category, and the caret opens on its own.
+    // The caret opens **its own** category's list, with no header of tabs over it: the
+    // pills in the row below are the categories, and a second control for the same
+    // choice is one to learn for nothing.
     click_at(&mut cx, "creation-pill-1-caret");
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_some());
-    for tab in ["create-tab-Sketch", "create-tab-Solid", "create-tab-Surface"] {
-        assert!(cx.debug_bounds(tab).is_some(), "{tab} is a category tab");
-    }
+    assert!(
+        cx.debug_bounds("create-tabs").is_none(),
+        "the flyout has no category header"
+    );
     assert!(
         cx.debug_bounds("create-row-Test_SolidTool").is_some(),
-        "the Solid pill opens on the Solid tab"
+        "the Solid pill opens on Solid's tools"
     );
-    assert!(
-        cx.debug_bounds("create-row-Test_SketchTool").is_none(),
-        "one category at a time"
-    );
-
-    // A tab click shows that category's tools and points its pill at the remembered one.
-    click_at(&mut cx, "create-tab-Surface");
-    draw(&mut cx);
-    assert!(cx.debug_bounds("create-row-Test_SurfaceTool").is_some());
-    assert!(cx.debug_bounds("create-row-Test_SolidTool").is_none());
-    assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.creation.memory("Surface").map(str::to_string)),
-        Some("Test_SurfaceTool".to_string()),
-        "browsing Surface loads its pill"
-    );
+    for other in ["create-row-Test_SketchTool", "create-row-Test_SurfaceTool"] {
+        assert!(
+            cx.debug_bounds(other).is_none(),
+            "{other} belongs to another pill's list"
+        );
+    }
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
         None,
-        "browsing arms nothing"
+        "opening a list arms nothing"
     );
+
+    // Browsing a different category is a different pill's caret.
+    click_at(&mut cx, "creation-pill-2-caret");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("create-row-Test_SurfaceTool").is_some());
+    assert!(cx.debug_bounds("create-row-Test_SolidTool").is_none());
 
     // Picking the row runs (arms) the tool and keeps it in its own pill.
     click_at(&mut cx, "create-row-Test_SurfaceTool");
@@ -980,9 +1014,7 @@ for _id, _command in (
     });
 
     // A Sketch pick fills **its** pill and leaves the others where they were.
-    click_at(&mut cx, "creation-pill-1-caret");
-    draw(&mut cx);
-    click_at(&mut cx, "create-tab-Sketch");
+    click_at(&mut cx, "creation-pill-0-caret");
     draw(&mut cx);
     click_at(&mut cx, "create-row-Test_SketchTool");
     draw(&mut cx);

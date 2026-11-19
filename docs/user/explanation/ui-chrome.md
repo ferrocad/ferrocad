@@ -1,8 +1,8 @@
 # Window chrome
 
 The chrome is everything around the canvas that belongs to the window rather than the
-document: the title bar and its application menu, the status line, and the separate
-Dev Tools window.
+document: the title bar and its application menu, the transient action toast, and the
+separate Dev Tools window.
 
 <div class="fc-tabs" data-fc-tabs>
 <div class="fc-tabs__bar" role="tablist" aria-label="Which host draws the figure">
@@ -12,7 +12,7 @@ Dev Tools window.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-chrome-desktop-window.png" alt="The application menu open in the desktop window">
 <img class="fc-tabs__closeup" src="../images/ui-chrome-desktop.png" alt="Close-up of the application menu">
-<figcaption><strong>Desktop</strong> — the leading <code>☰</code> menu open over the canvas. It holds the file verbs and the Dev Tools toggle. The platform title bar is drawn by the compositor, so it is not part of this nested capture; the menu and the status line at the bottom are the window-owned chrome.</figcaption>
+<figcaption><strong>Desktop</strong> — the leading <code>☰</code> menu open over the canvas. It holds the file verbs and the Dev Tools toggle. The platform title bar is drawn by the compositor, so it is not part of this nested capture; the menu is the window-owned chrome, and action feedback appears as the transient toast over the canvas.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-chrome-web-window.png" alt="The application menu open in the browser build">
@@ -44,11 +44,12 @@ ownership changes.
 
 ## The canvas and the floating controls
 
-The main window is the frame, the viewport and the status line. Everything else opens
-over the canvas:
+The main window is the frame and the full-bleed viewport. Everything else opens over
+the canvas:
 
-- the [toolbar](ui-toolbars.md) pill at the top-left;
-- the [globals dock](ui-action-bar.md) on the left edge, centred down it;
+- the [toolbar](ui-toolbars.md) row at the top-left, and the
+  [globals](ui-action-bar.md): `Undo`/`Redo`/`Save` and the Search pill in the title
+  bar, and `Fit` beside the navigation cube;
 - the bottom-left column: the Move coordinate row, the tool's completion row while a tool
   has begun, then the [tool loadout](ui-tool-loadout.md) with the create dock right after
   it;
@@ -62,18 +63,37 @@ The Move coordinates sit above the loadout so typing a large delta cannot move t
 and a modal or the wheel hides the transient Move pieces rather than drawing on top of
 them.
 
-## The status line
+## The action toast
 
-The thin line at the bottom of the window is the shell's neutral feedback channel:
+There is no permanent status strip: the viewport is full-bleed, and feedback is transient.
 
-- **Left:** the last command's status message. When the pointer is over an overlay's
-  interior, a cyan pass-through readout is added beside it, so you can see what a click
+- **Confirmations** (`Moved Box_01`, `Created Box_02`) appear as compact 6 px-radius
+  cards in the viewport's **bottom-right** corner, 16 px in from the right edge and above
+  the tool dock, so a wide dock never runs under the newest card. A card is only as wide
+  as its message, up to 340 px, so `Selected Rectangle` stays a short card while a long
+  solver sentence wraps inside its own instead of running across the canvas. The
+  newest card sits nearest the corner and pushes the older ones up. Each slides up the
+  last 6 px as it fades in, stays crisp for six seconds, then fades over 300 ms. Clicking
+  a card puts it away at once (the inline **Undo** chip keeps its own press). An identical
+  consecutive message refreshes the newest card instead of duplicating it. The feed holds
+  three cards: a fourth displaces the oldest information, while a warning or an error
+  keeps its place.
+- **Undo** appears as a chip only on the toast whose action still owns the top of the
+  undo stack. A view toggle or an older action never offers to undo someone else's work;
+  the chip is one tap away exactly when it is honest.
+- **Warnings and errors** (`fillet radius too large`, `over-constrained sketch`) stay in
+  amber or red until you click the card away, undo them, or complete the next valid
+  action.
+- **Hover** reports keep their own muted pill in the same corner, just above the toast
+  feed, while the pointer is over something explainable, so you can see what a click
   would reach.
-- **Right:** `FreeCAD <version> · <backend>` and the **Dev Tools** toggle.
+- **The Undo tooltip** is the passive memory of the last action: hovering `↶` names the
+  top of the undo stack, e.g. `Undo: Move 1 object (Ctrl+Z)`.
+- The version, backend and rest of the inventory live in the **About** card; **Dev Tools**
+  stays in the application menu.
 
-A command can replace the status message; view commands such as `Grid` and `Axes` report
-there too. They stay usable while a transform is pending, because the pending context
-permits view-only commands.
+View commands such as `Grid` and `Axes` report through the same toast, and stay usable
+while a transform is pending, because the pending context permits view-only commands.
 
 ## Dev Tools
 

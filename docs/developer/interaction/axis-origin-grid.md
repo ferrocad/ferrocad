@@ -188,9 +188,11 @@ of the flag. Clearing the claim (`false`, the default) restores the native drawi
 | Minor step | 10 mm dots | 1 mm dots |
 | Major step | 100 mm lines | 10 mm lines |
 | Colour | `#94A3B8` | `#94A3B8` |
-| Alpha at the origin | 0.15 | minor 0.15, major 0.30 |
+| Alpha at the origin | 0.15 | minor 0.30, major 0.60 |
+| Why the plane is stronger | the ground is over the canvas void (linear ≈ 0.006) | a plane sits on a lit facet (`GLASS_TOP`, ≈ 0.106): the ground's 0.15 blends into it, so the plane carries twice the ink to clear the facet |
 | Extent | disc of radius `R_max` around the camera pivot | the parent face's extent, or `R_max` for a datum |
 | Minor extent | clipped to what the dot field or line lattice can afford (`minor_radius`); the pitch never changes | same |
+| Minor mark | one **screen-space sprite** per intersection: four vertices at the point, the corner in `uv`, expanded by the renderer to two device pixels. Not a world-sized quad: that is bigger near the camera and smaller far from it, and — because the width lands in `GridStyle` — it invalidates the ground cache on every camera move, so the lattice is re-tessellated on every orbiting frame. A one-device-pixel `PointList` dot is the other failure: a quarter of the Coin disc's ink, and faint on HiDPI. The Coin backend draws a screen-space **disc** from the fragment's own pixel scale, floored at the same two pixels | same |
 | Depth | normal depth test | coplanar + `WIRE_DEPTH_BIAS` |
 
 **Radial falloff.** Every grid vertex carries
@@ -474,15 +476,17 @@ the visual work can use it.
   in-plane vertex distance, grown by `FACE_MARGIN` (10 %). No kernel call.
 - **Hover preview** — the viewport resolves the hovered `(entity, part)` into a frame on
   every pointer move (`refresh_hover_face`), keyed on the item's geometry generation so a
-  reshaped item re-resolves without resetting the dwell. The grid **blooms after
+  reshaped item re-resolves without resetting the dwell. The grid **appears after
   `FACE_DWELL` (120 ms)**; the immediate feedback is the hover report, as decided in §10.3.
-  The render loop requests animation frames while the dwell is pending, so the bloom
-  arrives without further pointer motion.
+  The render loop requests animation frames while the dwell is pending, so the preview
+  arrives without further pointer motion. A preview is a **hint, not a lock**: it is drawn
+  on top of the grid in force, which keeps its ink, and it goes away with the pointer.
 - **Layers** — `GridLayer` gained a `depth_bias`; `GridMesh` now owns the world layer plus
   an **active** and a **hover** layer. A local layer uses 1 mm dots / 10 mm lines
   (`GridStyle::workplane`), its face's radius, and `WIRE_DEPTH_BIAS` so it sits on the
-  surface instead of z-fighting with it. While a local layer exists the world ground drops
-  to `WORLD_DIM` (25 %) and the world triad to `WORLD_TRIAD_DIM` (30 %).
+  surface instead of z-fighting with it. While a local **plane** is active the world ground
+  drops to `WORLD_DIM` (25 %) and the world triad to `WORLD_TRIAD_DIM` (30 %); a hover
+  preview changes neither.
 - **Activation** — `set_active_workplane(ActiveWorkplane)` is the one setter,
   `activate_hovered_workplane()` binds the face under the pointer and `clear_workplane()`
   re-binds the world plane (there is no “no plane” state — see
@@ -551,8 +555,9 @@ landed in G5.)
 
 ## 10. Decisions to settle
 
-**Settled by G0–G5:** 0 (Z-up), 1 (per-vertex colour), 2 (1 px points, with the 4 px
-culling rule), 3 (the 120 ms hover dwell, with an immediate hover report), 4 (sticky
+**Settled by G0–G5:** 0 (Z-up), 1 (per-vertex colour), 2 (a two-device-pixel
+screen-space sprite, with the 4 px culling rule), 3 (the 120 ms hover dwell, with an
+immediate hover report), 4 (sticky
 until `Esc` or another activation), 5 (rotate the compass letters, keep the ring fixed),
 6 (`2.5 ×` eye distance, clamped 500–5 000 mm, overridable by the `grid_radius`
 preference; the cache key is the exact spec, so a zoom rebuilds and an orbit does not),
@@ -569,9 +574,14 @@ open.
 1. **Per-vertex colour vs ring batches.** Recommend per-vertex (G0): exact fade, one
    attribute, useful elsewhere. Cost: a vertex-layout change in `ferrocad_wgpu` and the
    pick shader.
-2. **Point rendering.** 1 px points meet "single-pixel dots"; if the design wants a 2 px
-   dot, use screen-facing quads and accept the extra triangles. Recommend 1 px + the
-   4 px culling rule.
+2. **Point rendering — settled (2026-11-18): a two-device-pixel sprite.** A
+   one-device-pixel `PointList` point meets "single-pixel dots" only on a 1× display: it
+   carries a quarter of the Coin disc's ink and its rasterisation depends on the pixel
+   phase, so the native grid read as faint beside the Coin overlay. The producer now emits
+   four vertices per dot carrying the quad's corner in `uv`, and `vs_sprite` expands them
+   to `SPRITE_PX` device pixels after projection — screen-space like a point (so the ground
+   cache survives an orbit), two pixels like the Coin disc, and no world-sized quads to
+   pay for.
 3. **Hover latency for the face grid.** Instant feels responsive but flickers while
    crossing edges; 120 ms matches the aurora's flash. Recommend a 120 ms dwell with an
    immediate *highlight*.

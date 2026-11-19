@@ -74,6 +74,13 @@ pub struct DocumentNode {
     #[serde(default)]
     pub active: bool,
     pub objects: Vec<ObjectNode>,
+    /// The document's undo transaction names, newest first (FreeCAD `UndoNames`).
+    /// The shell reads the first for the Undo tooltip and the toast's inline Undo.
+    #[serde(default)]
+    pub undo_names: Vec<String>,
+    /// The document's redo transaction names, newest first (FreeCAD `RedoNames`).
+    #[serde(default)]
+    pub redo_names: Vec<String>,
 }
 
 /// An object inside a document.

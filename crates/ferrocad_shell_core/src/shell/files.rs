@@ -125,7 +125,7 @@ impl Shell {
 
     /// Show a file verb's result in the status line and the console.
     pub(in crate::shell) fn file_status(&mut self, status: String, cx: &mut Context<Self>) {
-        self.model.lock().unwrap().status = status.clone();
+        self.model.lock().unwrap().note_status(status.clone());
         self.console_line(status, cx);
         cx.notify();
     }

@@ -699,17 +699,22 @@ fn key(node: &Bound<'_, PyAny>) -> usize {
     node.as_ptr() as usize
 }
 
-/// `coin.addOverlay(node)` — extract `node` now and keep it for the shell.
+/// `coin.addOverlay(node, role=None)` — extract `node` now and keep it for the shell.
 ///
 /// The tree is copied immediately (value semantics), so later mutations on the
 /// Python side are invisible until the node is re-registered. Adding a node that
 /// is already registered re-extracts it (identity is the Python object).
+///
+/// `role` is the provider feature the scene belongs to, passed by the facade while a
+/// provider callback registers the tree; the viewport replays that scene on a
+/// candidate plane (the hover bloom). `None` keeps an existing role and registers a
+/// scene no plane replay touches.
 #[pyfunction]
-#[pyo3(name = "addOverlay")]
-pub fn add_overlay(node: &Bound<'_, PyAny>) -> PyResult<()> {
+#[pyo3(name = "addOverlay", signature = (node, role = None))]
+pub fn add_overlay(node: &Bound<'_, PyAny>, role: Option<String>) -> PyResult<()> {
     let scene = extract_scene(node)?;
     let key = key(node);
-    ferrocad_inventor::overlays::put(key, scene);
+    ferrocad_inventor::overlays::put_with_role(key, scene, role);
     let handle = node.clone().unbind();
     let mut entries = overlay_entries()
         .lock()
@@ -766,6 +771,12 @@ pub fn overlays_dirty() -> bool {
 /// re-extracting or recompiling anything else.
 pub fn overlay_scenes() -> Vec<Scene> {
     ferrocad_inventor::overlays::take_scenes()
+}
+
+/// [`overlay_scenes`] with each scene's provider role, for a host that must tell the
+/// grid from the rest (the candidate-plane replay).
+pub fn overlay_scenes_tagged() -> Vec<ferrocad_inventor::overlays::OverlayScene> {
+    ferrocad_inventor::overlays::take_scenes_with_roles()
 }
 
 #[cfg(test)]
@@ -906,19 +917,19 @@ mod tests {
             assert!(!overlays_dirty());
 
             let first = separator();
-            add_overlay(&first).unwrap();
+            add_overlay(&first, None).unwrap();
             assert!(overlays_dirty(), "adding marks the set dirty");
             let scenes = overlay_scenes();
             assert_eq!(scenes.len(), 1);
             assert!(!overlays_dirty(), "taking the scenes clears the flag");
 
             // Re-adding the same object replaces its scene rather than duplicating.
-            add_overlay(&first).unwrap();
+            add_overlay(&first, None).unwrap();
             assert_eq!(overlay_scenes().len(), 1);
 
             // A structurally identical but distinct object is a different overlay.
             let second = separator();
-            add_overlay(&second).unwrap();
+            add_overlay(&second, None).unwrap();
             assert_eq!(overlay_scenes().len(), 2);
             assert!(!remove_overlay(&separator()), "identity, not equality");
             assert!(remove_overlay(&first));

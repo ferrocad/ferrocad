@@ -22,10 +22,25 @@ pub const GLASS: u32 = 0x151a24cc;
 pub const POPOVER_BG: u32 = 0x1d2026f2;
 /// The popover border.
 pub const POPOVER_BORDER: u32 = 0xffffff26;
-/// The action dock's glass strip (`#16181D` at 0.90).
+/// The chrome pills' glass (`#16181D` at 0.90): popovers and the create dock.
 pub const DOCK_BG: u32 = 0x16181de6;
-/// The action dock's border (`#FFFFFF` at 12%).
+/// The chrome pills' border (`#FFFFFF` at 12%).
 pub const DOCK_BORDER: u32 = 0xffffff1f;
+/// The transient action toast's glass (`#0F1218` at 0.88).
+pub const TOAST_BG: u32 = 0x0f1218e0;
+/// The toast's glass while the pointer is over it (`#171B23` at 0.94): the card itself is
+/// the dismiss target, so it lifts under the pointer instead of carrying a `×`.
+pub const TOAST_HOVER_BG: u32 = 0x171b23f0;
+/// A form field's recessed fill (`#181C24`): a numeric input reads as a well cut into the
+/// dock glass rather than as more glass.
+pub const FIELD_BG: u32 = 0x181c24;
+/// A focused form field's border and caret (`#00E5FF`, electric cyan): the one field a
+/// keystroke would edit.
+pub const FIELD_FOCUS: u32 = 0x00e5ff;
+/// A warning's ink (amber), for a sticky status alert.
+pub const STATUS_WARNING: u32 = 0xfbbf24;
+/// An error's ink (red), for a sticky status alert.
+pub const STATUS_ERROR: u32 = 0xf87171;
 /// The radial menu's dielectric torus: the canvas glass at 75%.
 pub const WHEEL_GLASS: u32 = 0x0f1218bf;
 /// A control's selected fill (`#2F4A6D`).
@@ -53,6 +68,16 @@ pub const ACTIVE_ACCENT: u32 = 0x38bdf8;
 pub const DOT_INACTIVE: u32 = 0x8b919a4d;
 /// The bright rim for a hovered structural piece (`#48E5FF`).
 pub const HOVER_RIM: u32 = 0x48e5ff;
+/// The grid and axis default ink (`#94A3B8`): the value the settings start from. The
+/// chrome twin of [`crate::draw::GRID_INK`].
+///
+/// [`INACTIVE_STRUCTURAL`] names the same colour for a *disabled control*; this name is
+/// for the viewport's default grid ink, so a settings row and a renderer read the same
+/// token without borrowing the disabled-state meaning.
+pub const GRID_INK: u32 = 0x94a3b8;
+/// A tool's preview ink (`#A78BFA`): the ghost's perimeter, the in-progress band and the
+/// anchor marker. The chrome twin of [`crate::draw::PREVIEW_INK`].
+pub const PREVIEW_INK: u32 = 0xa78bfa;
 /// Additive operations (`#F59E0B`): push/pull, extrude, pad.
 pub const PUSH_PULL_COLOR: u32 = 0xf59e0b;
 /// Destructive operations (`#EF4444`): delete, pocket, subtract.

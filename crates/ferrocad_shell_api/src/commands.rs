@@ -33,10 +33,10 @@ pub enum Surface {
     Radial,
     /// The mods/provider control in the viewport header.
     Mods,
-    /// The **creation pill**: a tool that creates new geometry, offered by the one
-    /// split control in the action dock and by the palette. It never becomes a dock
-    /// button of its own — a dock full of creation verbs is a toolbar, and the pill is
-    /// what the Add hand replaced it with.
+    /// The **creation pill**: a tool that creates new geometry, offered by a pill in
+    /// the create dock and by the palette. It never becomes a header or dock button of
+    /// its own — a strip full of creation verbs is a toolbar, and the pill is what the
+    /// Add hand replaced it with.
     Creation,
     /// Search-only: registered and listed in the palette (and Dev Tools), offered by no
     /// viewport surface. A utility that is not context-appropriate anywhere belongs
@@ -44,9 +44,9 @@ pub enum Surface {
     /// no surface cannot overflow a canvas strip.
     #[default]
     Palette,
-    /// The selection-driven action dock over the canvas. Only the built-in globals
-    /// (`Undo`, `Redo`, `Fit`) declare it: the strip's other two controls are the
-    /// creation pill and Search, which are shell chrome rather than registry rows.
+    /// The document and view globals. Only the built-ins declare it: `Undo`/`Redo`
+    /// appear in the title bar, `Fit` in the navicube bar, and Search is shell chrome
+    /// rather than a registry row.
     Dock,
     /// Registered but not offered on a viewport surface. The Dev Tools command list
     /// always shows it, and the app menu may offer it explicitly (Dev Tools is the

@@ -1297,6 +1297,7 @@ impl ShapeItem {
                 depth,
                 pickable,
                 ribbon: self.ribbon_aa,
+                sprite: false,
                 program: self.program.clone(),
             },
         }

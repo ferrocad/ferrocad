@@ -308,7 +308,9 @@ and a small in-context `✗`/`✓` pill that floats beside the gizmo
 **shell-owned surfaces**, not a command dialog (`shell/move_hud.rs`): they survive a
 commit, never hold a command token, and can coexist with a command modal. The finish pair
 is the shared `ferrocad_widgets::decision_pill`, so it is the same flat `✗ │ ✓` strip a
-modal dialog's footer renders — one widget, not two lookalikes. The old
+modal dialog's footer renders — one widget, not lookalikes. **2026-11-19:** the armed
+creation tool finishes through that same pill too (`render::tool_finish_overlay`, placed
+at `Tool::anchor` beside the shape), so Move, Modify and Create share one control. The old
 two-stage compact ↔ expanded pill, and the second (single-axis) readout beside it, are
 gone; the numbers a drag produces are drawn on the session's 3-D measuring tape as
 **ruler tags** (`gizmo-manipulators.md` §5), so the viewport no longer floats a duplicate
@@ -444,7 +446,7 @@ Held ──✗ / Esc──► handle re-armed at rest, nothing written ──►
 - **What a pending transform refuses.** Selecting or clearing another object, pressing a
   loadout key (pausing Move included), changing `Select ▾`, switching the handle set,
   starting a tool, dragging another body, and **edit commands** (`CmdType: ForEdit`,
-  e.g. `Create Box`). Each refusal writes the reason to the status line
+  e.g. `Create Box`). Each refusal writes the reason to the status toast
   (`move pending — …` or `rotation pending — …`), the loadout bar dims and drops
   its click handlers, and nothing is committed or dropped. **View commands**
   (`CmdType: ForView`: grid, projection, …) stay live, so navigation and presentation

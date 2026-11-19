@@ -11,7 +11,8 @@
 //! `ferrocad_shell_rust` plugs `PartEngine` in.
 //!
 //! ```text
-//! ferrocad_shell_doc -> ferrocad_core, ferrocad_stage, ferrocad_shell_api, serde_json
+//! ferrocad_shell_doc -> ferrocad_core, ferrocad_stage, ferrocad_shell_api,
+//!                       ferrocad_theme, serde_json
 //!                       must NOT -> ferrocad_part, ferrocad_occt, opencascade-sys
 //! ferrocad_shell_rust -> ferrocad_shell_doc, ferrocad_part, ferrocad_occt
 //! ```
@@ -25,6 +26,7 @@ mod backend;
 
 pub mod appearance_settings;
 pub mod grid_settings;
+pub mod theme_settings;
 
 pub use backend::{hide_object, property_rows, DocumentBackend};
 

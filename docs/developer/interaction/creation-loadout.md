@@ -30,17 +30,21 @@ there** versus **adding something new**.
 - **The Add hand** (bottom row, right after the Modify bar): the **create dock**, one pill
   per category. Authoring-tied. It governs what new shape is created and how its placement
   frame snaps to the scene, body, face or edge under the pointer.
-- **The globals** (left edge, a vertical pill): `Undo`, `Redo`, `Fit` and Search. They are
-  not a hand: they never change with the selection or the edition, and they are the one
-  row that is not about geometry.
+- **The globals** (split by role): `Undo`, `Redo` and `Save` in the title bar,
+  `Fit` beside the navigation cube, and Search centred in the title bar. They are not a
+  hand:
+  they never change with the selection or the edition, and they are the one group that is
+  not about geometry.
 
 ```text
-Left edge (globals)        Bottom row (Modify hand, then Add hand)
-[ Undo  ]                  [ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]
-[ Redo  ]                  [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
-[ Fit   ]
-[───────]
-[ 🔍 Search (Ctrl+K) ]
+Title bar
+[ ☰  FerroCAD — Sample   ↶ ↷ Save ]        [ 🔍 Search (Ctrl+K) ]        [ – □ ✕ ]
+
+Canvas top-left (transparent)                                        Top-right
+[ Grid ▾ Axes ▾ WP: XY ▾ Gizmo ▾ Select: Body ▾ Snap ▾ ]   [ navicube + Fit ]
+
+Bottom row (Modify hand, then Add hand)
+[ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]  [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
 ```
 
 ### 0.1 The create dock and its flyout
@@ -69,10 +73,13 @@ slots, then one pill per category.
   moves. That is the slot-with-variants shape Slot 1 has for `1` Move ⇄ Rotate, applied to
   a category's tools. The key never opens a menu: browsing a list is what the slot exists
   to save, and the flyout is one caret away.
-- **The flyout** (`▾` on a pill) shows one **category at a time** behind a segmented header
-  bar (`Sketch | Solid | Surface | …`). The list used to be one flat column mixing drawing
-  tools, primitives and profile features. The caret reads `^` while that pill's flyout is
-  open, so the row says which list is showing.
+- **The flyout** (`▾` on a pill) is **that pill's category**, with no header over it
+  (2026-11-19). The list used to be one flat column mixing drawing tools, primitives and
+  profile features, then one category behind a segmented bar of category tabs; the tabs
+  went because the row of pills already *is* the category choice — browsing another
+  category is that pill's caret (or the wheel's `Create ▸`), so the panel offers one short
+  list and no second control for the same decision. The caret reads `^` while that pill's
+  flyout is open, so the row says which list is showing.
 - **Hold `Shift` to peek.** While `Shift` is free, holding it shows the equipped pill's
   flyout and releasing it gives the flyout back — the keyboard's hover over the slot, the
   list without the click. A tool that is **drawing** does not stand down: a two-click
@@ -88,8 +95,10 @@ slots, then one pill per category.
 - **Nothing placed, no completion row.** Equipping a tool is quiet: the canvas shows the
   hover ghost of what the first click would make (for a two-click tool, the anchor marker
   in the placement plane) and **no row at all**. The completion row — `Rectangle ·
-  1 point · click the opposite corner · ✗ ✓` — is a response to a click, and appears
-  directly above the hands' bar in the bottom-left column. That includes the parameter
+  1 point · click the opposite corner` — is a response to a click, and appears
+  directly above the hands' bar in the bottom-left column; the `✗`/`✓` pair that ends the
+  session floats beside the shape (`render::tool_finish_overlay`), the same decision pill
+  the Move form and a released manipulator use. That includes the parameter
   tools: `BoxTool` anchors on the press and only then offers `W`/`L`/`H`, so its numbers
   are typed *after* the placement — before the click there is no row and no live field for
   a digit to fall into, which is what keeps `5`–`9` on the hand while a Solid pill is
@@ -106,12 +115,13 @@ slots, then one pill per category.
   so the pill behind the flyout already names what the next click would run.
 - **The strip is permanent, and the globals are not part of it.** There is no
   `⊕ Create Dock` toggle: a loadout that can be folded away is not a loadout, and the six
-  keys that address it would then address nothing. The globals dock holds `Undo`, `Redo`,
-  `Fit` and Search and nothing else, so it never changes width with an edition.
+  keys that address it would then address nothing. The globals hold `Undo`/`Redo`/`Save`,
+  `Fit` and Search and nothing else, so they never change width with an edition.
 - **Activating a tool adds a row; it does not replace anything.** Once the tool has begun —
   a click has placed its anchor — its **completion row**
-  (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) is drawn in the bottom-left column,
-  directly **above the two hands' bar**. Arming alone adds nothing: an armed tool that has
+  (`[ Box │ W [20.00] L [20.00] H [20.00] mm │ hint ]`, boxed fields) is drawn in the
+  bottom-left column,
+  directly **above the two hands' bar**, with the `✗`/`✓` pair floating beside the box. Arming alone adds nothing: an armed tool that has
   placed nothing shows only its hover ghost on the canvas (for a drawing tool, the plane
   marker that says where the first click will land), so nothing ever looks like a dialog
   nobody opened. The loadout, the create dock and the globals stay in place, and the
@@ -131,7 +141,7 @@ Both hands obey the same four invariants:
    it is finished (`✓`/`Enter`) or rolled back (`✗`/`Esc`). Conversely, an `ARMED`
    creation tool suspends the Modify hand's gizmos and manipulators and adds the tool's
    own pill over the bottom of the canvas.
-4. **Numbers never jump.** Every numeric input is 11–12 px tabular monospace in a
+4. **Numbers never jump.** Every numeric input is a fixed-width boxed field in the
    screen-anchored bar, unfocused by default so the canvas keeps the keyboard until `Tab`
    or a digit is pressed.
 
@@ -230,20 +240,28 @@ stateDiagram-v2
    the row in above the hands' bar:
 
    ```text
-   [ Undo ]   [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ✗ │ ✓ ]
+   [ Undo ]   [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ hint ]
    [ Redo ]   [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
    [ Fit  ]
    [──────]
    [ 🔍 Search (Ctrl+K) ]
+               ✗│✓   ← floats beside the box's own corner
    ```
 
-   The `✗`/`✓` pair is the pending half. Before the row exists the only sign of the armed
+   The `✗`/`✓` pair is the pending half, and it is **not part of the row** (2026-11-19):
+   ending a session is the shared `ferrocad_widgets::decision_pill` — the strip a modal
+   footer renders and the Move form and a released manipulator float — placed in the empty
+   screen octant around `Tool::anchor` (the corner a box grows from, the centre a circle
+   grows around, the frontier of a polyline) through
+   `InventorViewport::tool_finish_anchor`. Anchoring it at the tool's own point rather than
+   at the pointer is what keeps the control out of the way of the next click; a tool with
+   no anchor falls back to the canvas. Before the row exists the only sign of the armed
    tool is the hover ghost — for a two-click tool the anchor marker in the placement
    plane — so pressing a pill equips a slot instead of opening a dialog.
 
-   The row is a row in the bottom-left column, not a floating HUD: the numbers stay in one
-   fixed tabular pill (`visual-language.md` §0.4), the column's rows grow upward, and the
-   canvas rectangle never moves. The loadout the
+   The row itself stays a row in the bottom-left column, not a floating HUD: the numbers
+   live in one fixed tabular pill (`visual-language.md` §0.4), the column's rows grow
+   upward, and the canvas rectangle never moves. The loadout the
    session was started from stays in hand — the same reason the Modify bar keeps its slots
    while a move is pending.
    Entering `ARMED` hides and un-offers the hosted `GizmoSet` and the workbench
@@ -341,7 +359,7 @@ pub enum TopologyGate {
   element names.
 - **Disabled feedback.** An unsatisfied gate renders the tool in `ui::INACTIVE_STRUCTURAL`
   (see §5; the token is new) and refuses to arm it. Hovering writes the exact requirement
-  to the status bar: `5 object(s) · Prism requires a selected Sketch or closed Wire`.
+  to the status toast: `5 object(s) · Prism requires a selected Sketch or closed Wire`.
 
 ---
 
@@ -358,7 +376,7 @@ uncommitted edit:
    alongside the loadout bar (`visual-language.md` §1.5) and a click is
    consumed with:
    `Pending <verb> — apply (✓ / Enter) or cancel (✗ / Esc) before starting a tool`.
-   The globals dock dims with the same `blocked` flag.
+   The title-bar document actions dim with the same `blocked` flag.
 2. **Creation `ARMED`, no anchor placed → the switch is free.** If the user armed `Box`
    but has not placed an anchor (`in_progress_preview == false`), clicking another
    creation tool or pressing `1`–`3`/`0` cancels the armed tool cleanly; no transaction
@@ -387,7 +405,7 @@ The tool strip's dimension fields (`W`, `L`, `H`, `R`) follow the keyboard contr
   dimensions, preserving the zero-mouse fast path of the old `Create Box` button.
 - The values live on the tool, not in the strip: `ToolStatus` carries
   `fields: Vec<ToolField { id, label, value, unit, step, min, max }>` and the host writes
-  back through `Tool::set_field`. **Built 2026-11-15** — the strip is one tabular-monospace
+  back through `Tool::set_field`. **Built 2026-11-15** — the strip is one row of boxed
   row inside the tool strip, the field text is the tool's own value, and the Box tool is
   the canonical case (`W/L/H`, 20 mm each).
 
@@ -419,14 +437,16 @@ renderer):
 | Active category & `✓` | `ui::CHROME_ACTIVE` over `ui::CHROME_ACTIVE_BG` | `#67D7FF` on `#1B2B38` @ 0.33 | The equipped-slot highlight pair |
 | Hover bloom (12 px) | `ui::HOVER_RIM` | `#48E5FF` | Category/tool glyphs and `✓` hover ink |
 | Disabled tool | `ui::INACTIVE_STRUCTURAL` | `#94A3B8` | **New token**: `ferrocad_theme::ui` has only `MUTED` (`#8B919A`) today; the stage's `INACTIVE_COLOR` is this value |
-| Dimension fields | `ui::WHEEL_GLASS` bg, `ui::CHROME_LINE` rest, `ui::ACTIVE_ACCENT` (`#38BDF8`) focus | — | 11–12 px tabular `"monospace"`; no caret when blurred |
+| Dimension fields | `ui::WHEEL_GLASS` bg, `ui::CHROME_LINE` rest, `ui::ACTIVE_ACCENT` (`#38BDF8`) focus | — | 28 px boxed field at 13 px, shared with the transform forms; no caret when blurred |
 | Additive / subtractive | `ui::PUSH_PULL_COLOR` / `ui::SUBTRACT_COLOR` | `#F59E0B` / `#EF4444` | Face-hosted `+N` extrude vs `-N` pocket; also the `✗` hover ink |
-| 3-D ghost preview | `draw::GLASS_TOP` / `draw::GLASS_SHADE` on `BLENDED_DEPTH` | 35 % alpha (new constant) | Display-only, unpickable, no ghost pass; wire in `draw::EDGE_FRONT` (`HIGHLIGHT_TINT` is the 12 % face wash, not a wire ink) |
+| 3-D ghost preview | `draw::GLASS_TOP` / `draw::GLASS_SHADE` on `BLENDED_DEPTH` | 35 % alpha | Display-only, unpickable, no ghost pass; wire in `draw::PREVIEW_INK` — the one perimeter token the creation and the modify ghosts share (`HIGHLIGHT_TINT` is the 12 % face wash, not a wire ink) |
 
-Two deltas from the current tool strip: its **Finish** is filled `ACCENT` (`#2F4A6D`) with
-`FG` ink, not the `CHROME_ACTIVE_BG`/`CHROME_ACTIVE` pair; and its **Cancel** is neutral
-(`PANEL`/`PANEL_ALT`), not a subtract hover. The creation strip adopts the Move finish
-pill's accents so both hands read as one language.
+**The finish control is the Move form's, accent included (2026-11-19).** The row carries
+no buttons at all: its `✗`/`✓` pair moved out to the shared decision pill above, so the
+creation session finishes through the same widget, in the same accents
+(`CHROME_ACTIVE` on `CHROME_ACTIVE_BG` for `✓`, muted with a subtract hover for `✗`), as a
+Move, a released manipulator and a modal footer. The old `ACCENT`-filled `Finish` and the
+neutral `Cancel` inside the row are gone.
 
 ---
 
@@ -462,7 +482,7 @@ reporting a name).
   it. Keep `HoverReport` a neutral viewport type and add a shell-side chrome-through field
   (decision in [`creation-pill-loadout.md`](creation-pill-loadout.md) §6.4).
 - While `ARMED`, hovering a face or edge populates `HoverReport.target` (`Face6`,
-  `Edge3`); the strip's target badge reads it, so the status line and the badge cannot
+  `Edge3`); the strip's target badge reads it, so the status toast and the badge cannot
   drift (`armed: Box on Face6 (+N)`).
 
 ---
@@ -530,20 +550,21 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   (never the worker-dispatching `surfaces.operations`), and **one** transaction. A refusal is
   a status sentence and writes nothing; each verb has a documented default number, which
   `Activated(value)` overrides until the C2 `ToolField` strip can carry it.
-- **The globals dock is the contract.** `dock` = the globals only (`Undo`, `Redo`, `Fit`)
-  plus Search, in a **vertical pill on the canvas' left edge** (`chrome::globals_dock`),
-  and nothing else. The Add hand's pills are in the bottom row, one per
+- **The globals split is the contract.** `dock` = the globals only (`Undo`, `Redo`, `Fit`)
+  plus `Save` and Search, placed by role: `Undo`/`Redo`/`Save` in the title bar
+  (`chrome::document_controls`), `Fit` in the navicube bar, Search centred in the title bar
+  (`chrome::search_pill`). The Add hand's pills are in the bottom row, one per
   `FerroCAD_Category` in the design's order (`Sketch`, `Solid`, `Surface`, `Text`, `Mesh`),
   permanently and right after the Modify bar; a pill's `▾` opens its category's flyout,
   whose rows are that category's `creation` commands. An
   unannotated command (or an unknown `FerroCAD_Surface`) falls back to the **palette**, so
-  a mod cannot overflow the dock; the shell test asserts the globals-only dock, the pills'
-  presence beside the loadout bar, and the flyout opening.
+  a mod cannot overflow the chrome; the shell test asserts the document/view split, the
+  pills' presence beside the loadout bar, and the flyout opening.
 - **One session, one owner.** Arming a tool (or a pending manipulator) dims the hand
   column to 45 % and drops its clicks; the dock dims the same way while a transform or
   manipulator is pending. The armed tool's row is **added above** the create dock
-  (`chrome::tool_pill`: label / numbers or point count / hint / `✗` / `✓`), so the dock and
-  the loadout stay put while a session runs.
+  (`chrome::tool_pill`: label / numbers or point count / hint), with the `✗`/`✓` pair
+  floating beside the shape, so the dock and the loadout stay put while a session runs.
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). **The hover preview frame is in**
   (C4, 2026-11-15): `ferrocad_stage::HoverTarget` resolves the pointer into the face's
@@ -560,7 +581,7 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
 - The `GizmoSet`/manipulator suspension, the radial suppression and the hover-to-arm
   suppression on `start_tool` are built.
 - **The tool strip's fields (C2, 2026-11-15).** `ToolStatus::fields` + `Tool::set_field`
-  drive one tabular-monospace row inside the strip; the Box tool publishes `W/L/H`, `Tab`
+  drive one row of boxed fields inside the strip; the Box tool publishes `W/L/H`, `Tab`
   cycles them, a digit replaces the focused value, `Backspace` edits it, `Enter`/`✓`
   commits and the inner `Esc` gives the keyboard back. `ferrocad_viewport::set_tool_field`
   is the write path, so the preview and the row cannot disagree.

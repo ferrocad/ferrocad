@@ -13,6 +13,9 @@ struct Globals {
     topology: u32,
     depth_bias: f32,
     two_tone: u32,
+    // The view's size in device pixels: `[width, height, 0, 0]`. A point sprite is
+    // sized in pixels, so it needs this; nothing else reads it.
+    viewport: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -35,6 +38,12 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
+    return place(input);
+}
+
+/// The world → clip transform every vertex stage shares (a WGSL entry point cannot call
+/// another, so the transform lives here).
+fn place(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     let world = globals.model * vec4<f32>(input.position, 1.0);
     // Uniform scale is assumed, so the model matrix doubles as the normal matrix.
@@ -74,6 +83,42 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let base = select(globals.shade.rgb, albedo.rgb, up || globals.two_tone == 0u);
     let lit = base * (ambient + (1.0 - ambient) * diffuse);
     return vec4<f32>(lit, albedo.a);
+}
+
+// A screen-space **point sprite**: the four vertices of one mark share a position and
+// carry the quad's corner in `uv`, so the mark is expanded here — after projection, in
+// pixels — instead of being sized in the world.
+//
+// This is what keeps a dot field cheap: a world-sized dot has to be rebuilt whenever the
+// camera moves (its width comes from the projection) and foreshortens with depth, while
+// this one is the same mark at every depth and the mesh never changes. Two device pixels
+// is the Coin shader's floor (`dot_cov` never goes below a one-pixel radius), so the two
+// backends draw the same mark.
+const SPRITE_PX: f32 = 2.0;
+
+@vertex
+fn vs_sprite(input: VertexInput) -> VertexOutput {
+    var output = place(input);
+    // NDC spans 2 across the viewport, so one pixel is `2 / viewport` in NDC and the
+    // quad's half-extent is `SPRITE_PX / viewport`. Multiplying by `w` cancels the
+    // perspective divide, which is what makes the mark the same size near and far (and it
+    // is a no-op for an orthographic projection, whose `w` is 1).
+    let corner = input.uv * 2.0 - 1.0;
+    let offset = corner * (SPRITE_PX / globals.viewport.xy) * output.clip_position.w;
+    output.clip_position = vec4<f32>(
+        output.clip_position.xy + offset,
+        output.clip_position.z,
+        output.clip_position.w,
+    );
+    return output;
+}
+
+// The sprite's ink is its per-vertex colour, unlit: a dot is a mark on the drawing, not a
+// surface. The quad is `SPRITE_PX` across and the MSAA target antialiases its edge, so
+// there is no per-pixel coverage term to compute.
+@fragment
+fn fs_sprite(input: VertexOutput) -> @location(0) vec4<f32> {
+    return globals.color * input.color;
 }
 
 // A screen-space control ribbon: unlit, and feathered over its last screen pixel.

@@ -44,7 +44,7 @@ pub const GROUP: &str = "Mods/grid/ferrocad";
 
 /// The node's type id: the synthetic type the app script's root uses, so the tree
 /// row and the property pane treat both halves identically.
-const SETTINGS_TYPE: &str = "FerroCAD::Settings";
+pub(crate) const SETTINGS_TYPE: &str = "FerroCAD::Settings";
 
 /// The chip on the spacing rows while the step follows the layer's extent.
 /// The drawn step is then derived, so these two rows are the fallback rather than
@@ -64,6 +64,8 @@ pub fn root_node() -> DocumentNode {
         label: SETTINGS_ROOT.to_string(),
         active: false,
         objects: vec![grid_node()],
+        undo_names: Vec::new(),
+        redo_names: Vec::new(),
     }
 }
 
@@ -582,6 +584,8 @@ mod tests {
                     type_id: SETTINGS_TYPE.to_string(),
                 })
                 .collect(),
+            undo_names: Vec::new(),
+            redo_names: Vec::new(),
         }
     }
 
@@ -630,6 +634,8 @@ mod tests {
             label: "Grid".to_string(),
             active: false,
             objects: Vec::new(),
+            undo_names: Vec::new(),
+            redo_names: Vec::new(),
         }];
         merge(&mut nodes);
         assert_eq!(nodes.len(), 1, "{nodes:?}");

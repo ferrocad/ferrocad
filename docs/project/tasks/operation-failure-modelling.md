@@ -7,7 +7,7 @@ and [`visual-language.md`](../../developer/interaction/visual-language.md) §5 (
 model) and §7 (one token source).
 
 The premise is the project's standing bar: **with good UX the user should not have to be
-careful.** A fillet that fails today is reported as a sentence in a status bar, if at
+careful.** A fillet that fails today is reported as a sentence in the action toast, if at
 all. This task turns that sentence into a value the model can act on, so the UI can
 steer the user to a valid action instead of asking them to parse prose.
 

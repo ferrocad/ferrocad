@@ -35,7 +35,7 @@ category and reads `◂ Back`: click it (or press `Backspace`) to go back up.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-wheel-menu-window.png" alt="The wheel menu highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-wheel-menu.png" alt="Close-up of the wheel menu">
-<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, the loadout and create dock along the bottom, and the globals dock on the left. Move, Rotate and Toggle visibility are root verbs beside the `Workplane ▸`, `Create ▸` and `Modify ▸` categories; Delete is the destructive slot, ordered last.</figcaption>
+<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, the loadout and create dock along the bottom, and the globals split between the title bar and the navigation cube. Move, Rotate and Toggle visibility are root verbs beside the `Workplane ▸`, `Create ▸` and `Modify ▸` categories; Delete is the destructive slot, ordered last.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-wheel-menu-web-window.png" alt="The wheel menu highlighted in the browser build">

@@ -8,7 +8,7 @@
 //! The producer is pure arithmetic: no kernel, no gpui, no Python. The viewport owns
 //! the mesh identities, the projection culling and the depth ordering.
 
-use ferrocad_graphics::{Camera, Vertex};
+use ferrocad_graphics::{Camera, Vertex, theme};
 use ferrocad_types::Vector3;
 
 use crate::axis::{self, AxisStyle};
@@ -47,9 +47,10 @@ const MINOR_LINE_COLUMNS: f64 = 512.0;
 
 /// How many minor columns the **dot** form may draw across its radius.
 ///
-/// A dot field costs one vertex per intersection, so it is capped hard: about 40 k dots is
-/// what `grid::ground` will emit. Same rule as the line form — the level is clipped, never
-/// coarsened, so the configured pitch is always what is drawn.
+/// A dot field costs one **sprite** (four vertices) per intersection, so it is capped
+/// hard: about 40 k dots is what `grid::ground` will emit. Same rule as the line form —
+/// the level is clipped, never coarsened, so the configured pitch is always what is
+/// drawn.
 pub const DOT_COLUMNS: f64 = 112.0;
 
 /// How many samples one line may take across its length.
@@ -59,10 +60,26 @@ pub const DOT_COLUMNS: f64 = 112.0;
 /// column count, which starved the minor level's density budget.
 const FADE_SEGMENTS: f64 = 24.0;
 
-/// Linear `#94A3B8` (the visual language's structural ink).
-pub const GRID_COLOR: [f32; 4] = [0.296, 0.366, 0.480, 1.0];
+/// Linear `#94A3B8` (the visual language's structural ink): the theme's
+/// [`GRID_INK`](ferrocad_theme::draw::GRID_INK), which is also what the settings start
+/// from (`FerroCAD.Grid.color`, a FerroCAD extension setting).
+pub const GRID_COLOR: [f32; 4] = theme::GRID_INK;
 /// The world grid's alpha at the origin.
 pub const GRID_ALPHA: f32 = 0.15;
+
+/// A **finite-surface** plane's minor ink.
+///
+/// The ground is drawn over the canvas void (linear luminance ≈ 0.006), where 0.15 of
+/// the structural ink is enough. A bound or hovered plane is drawn over a lit facet
+/// (`GLASS_TOP`, ≈ 0.106): the same ink alpha-blends into it and the lattice reads as a
+/// tint rather than a line. The workplane therefore carries twice the ground's ink, and
+/// its major level twice the minor — the contrast is in the flat alphas, so both
+/// backends (the native generator and the Coin shader's `workplane_steps.zw` claim)
+/// get it without a WGSL change.
+pub const WORKPLANE_MINOR_ALPHA: f32 = 0.30;
+/// A finite-surface plane's major ink: twice its minor level, the same `1:2` ratio the
+/// workplane has always kept.
+pub const WORKPLANE_MAJOR_ALPHA: f32 = 0.60;
 /// The fraction of the grid radius where the radial fade begins. Inside it the grid
 /// stays at full alpha; beyond it a smoothstep falloff reaches zero at the radius.
 pub const FADE_START: f64 = 0.55;
@@ -150,8 +167,8 @@ impl GridSpec {
 /// Which form the minor level takes.
 ///
 /// The native grid and the Coin shader both draw **dots** at the minor intersections by
-/// default: a dot is the product of the two axes' line coverage, and it reads as the fine
-/// level under the major lattice instead of a dense cage of lines. [`Lines`](Self::Lines)
+/// default: a dot is a fixed-size mark in screen space, so it reads as the fine level under
+/// the major lattice instead of a dense cage of lines. [`Lines`](Self::Lines)
 /// draws a full lattice at the minor step, which is the graph-paper look.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MinorStyle {
@@ -236,12 +253,13 @@ impl GridStyle {
     }
 
     /// A workplane grid: 1 mm minor dots, 10 mm major lines, the major level twice as
-    /// strong as the minor one.
+    /// strong as the minor one, at the stronger finite-surface ink (see
+    /// [`WORKPLANE_MINOR_ALPHA`]).
     pub fn workplane() -> Self {
         Self {
             color: GRID_COLOR,
-            minor_alpha: GRID_ALPHA,
-            major_alpha: GRID_ALPHA * 2.0,
+            minor_alpha: WORKPLANE_MINOR_ALPHA,
+            major_alpha: WORKPLANE_MAJOR_ALPHA,
             dim: 1.0,
             triad_dim: 1.0,
             minor_style: MinorStyle::Dots,
@@ -402,15 +420,17 @@ fn coarser_step(step: f64) -> f64 {
 
 /// The vertices for the grid's packets, in draw order.
 ///
-/// The minor level is either **dots** (`Topology::Points`) or a lattice of lines; a line
-/// level is a `LineList` at a hairline width, or an in-plane triangle stripe when the style
-/// asks for a wide stroke (then `*_indices` is non-empty and the packet asks for the
-/// renderer's blended scene-triangle variant).
+/// The minor level is either **dots** or a lattice of lines. A dot is a screen-space
+/// sprite (four vertices sharing one position, the quad's corner in `uv`, expanded to a
+/// fixed pixel size by the renderer), so it is always triangles; a line level is a
+/// `LineList` at a hairline width, or an in-plane triangle stripe when the style asks for
+/// a wide stroke (then `*_indices` is non-empty and the packet asks for the renderer's
+/// blended scene-triangle variant).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GridGeometry {
-    /// `Topology::Points` — the minor level with [`MinorStyle::Dots`].
+    /// `Topology::Triangles` — one point sprite per minor intersection.
     pub dots: Vec<Vertex>,
-    /// The dots as triangles (a wide dot); empty for a 1 px point.
+    /// The dots' triangle indices (four vertices, six indices per dot).
     pub dot_indices: Vec<u32>,
     /// The minor lattice as a hairline `LineList` ([`MinorStyle::Lines`]).
     pub minor_lines: Vec<Vertex>,
@@ -438,7 +458,7 @@ pub struct Ground {
 
 /// The radius the **minor** level covers: the disc, clipped to what its form can afford.
 ///
-/// A dot field costs one vertex per intersection and a line lattice one row per column, so
+/// A dot field costs one sprite per intersection and a line lattice one row per column, so
 /// a fine step cannot cover an arbitrarily large disc. Clipping the *extent* keeps the
 /// configured **pitch** exact: the level fades out where it would get too dense, instead
 /// of coarsening the step (which made the subdivisions change as the camera zoomed out) or
@@ -497,15 +517,23 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> Ground {
     let rm = minor_radius(minor, radius, style.minor_style);
     let columns = rm / minor;
     if style.minor_style != MinorStyle::Lines {
-        // Dots, skipping the major lines (the lines own those pixels). A wide dot is an
-        // in-plane square (four vertices, six indices) instead of a 1 px point, so the
-        // Coin shader's covered dot and the native one are the same size.
+        // Dots, skipping the major lines (the lines own those pixels).
+        //
+        // A dot is a **screen-space sprite**: four vertices at the intersection carrying
+        // the quad's corner in `uv`, which the renderer expands to a fixed number of
+        // device pixels. Its size is therefore not in this geometry, which is what keeps
+        // an orbit cheap (a camera-derived width would change [`ground_key`] on every
+        // frame, rebuilding the whole lattice) and keeps near and far dots the same mark.
         let count = columns.ceil() as i64;
-        let half = if style.minor_width.is_finite() && style.minor_width > 0.0 {
-            style.minor_width * 0.5
-        } else {
-            0.0
-        };
+        // The field grows to tens of thousands of four-vertex sprites, so reserve rather
+        // than letting the vertex and index vectors double their way there: the grid is
+        // rebuilt whenever the spec or the ink changes (a zoom moves the radius), and the
+        // copy churn of that growth was most of its cost. A disc holds about `π` dots per
+        // column squared, so `3.5` leaves a little headroom without a spec-sized buffer.
+        let dots = (3.5 * columns * columns) as usize;
+        ground.dots.reserve(dots * 4);
+        ground.dot_indices.reserve(dots * 6);
+        let mut corner = vertex(Vector3::new(0.0, 0.0, 0.0), [0.0; 4]);
         for ix in -count..=count {
             let a = ix as f64 * minor;
             for iy in -count..=count {
@@ -521,31 +549,24 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> Ground {
                 if alpha <= 0.0 {
                     continue;
                 }
-                if half > 0.0 {
-                    let base = ground.dots.len() as u32;
-                    for (u, v) in [
-                        (a - half, b - half),
-                        (a + half, b - half),
-                        (a + half, b + half),
-                        (a - half, b + half),
-                    ] {
-                        ground
-                            .dots
-                            .push(vertex(spec.workplane.point(u, v), ink(style, alpha)));
-                    }
-                    ground.dot_indices.extend_from_slice(&[
-                        base,
-                        base + 1,
-                        base + 2,
-                        base,
-                        base + 2,
-                        base + 3,
-                    ]);
-                } else {
-                    ground
-                        .dots
-                        .push(vertex(spec.workplane.point(a, b), ink(style, alpha)));
+                // One transform per dot: every corner of the sprite is this point, and the
+                // size lives in the shader.
+                let point = spec.workplane.point(a, b);
+                corner.position = [point.x as f32, point.y as f32, point.z as f32];
+                corner.color = ink(style, alpha);
+                let base = ground.dots.len() as u32;
+                for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                    corner.uv = [u, v];
+                    ground.dots.push(corner);
                 }
+                ground.dot_indices.extend_from_slice(&[
+                    base,
+                    base + 1,
+                    base + 2,
+                    base,
+                    base + 2,
+                    base + 3,
+                ]);
             }
         }
     } else {
@@ -1021,16 +1042,38 @@ mod tests {
         assert!((spread.min(spread_x) - 0.2).abs() < 1e-6);
     }
 
-    /// A wide dot is an in-plane square, so the minor width sizes the dots too — the Coin
-    /// shader's dot is the product of two stroked axes and grows with the same setting.
+    /// A dot is a **screen-space sprite**: four vertices at the intersection carrying the
+    /// quad's corner in `uv`, which the renderer expands to a fixed number of device
+    /// pixels. Nothing about the dot is sized in the world, so an orbit neither rebuilds
+    /// the lattice nor swells near dots and shrinks far ones.
     #[test]
-    fn a_wide_dot_is_an_in_plane_square() {
+    fn a_dot_is_a_screen_space_sprite() {
         let mut spec = spec(10.0);
         spec.minor = 1.0;
         spec.major = 5.0;
-        let points = ground(&spec, &GridStyle::default());
-        assert!(points.dot_indices.is_empty(), "a hairline dot is a point");
+        let dots = ground(&spec, &GridStyle::default());
+        assert!(!dots.dots.is_empty());
+        assert_eq!(dots.dots.len() % 4, 0, "four corners per dot");
+        assert_eq!(dots.dot_indices.len(), dots.dots.len() / 4 * 6);
 
+        let quad = &dots.dots[0..4];
+        let centre = |axis: usize| {
+            quad.iter().map(|v| v.position[axis]).sum::<f32>() / quad.len() as f32
+        };
+        for corner in quad {
+            assert!((corner.position[0] - centre(0)).abs() < 1e-6, "one world point");
+            assert!((corner.position[1] - centre(1)).abs() < 1e-6);
+            assert_eq!(corner.color, quad[0].color, "one ink for the whole mark");
+        }
+        let uvs: Vec<[f32; 2]> = quad.iter().map(|v| v.uv).collect();
+        assert_eq!(
+            uvs,
+            vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            "the corner is the sprite's local coordinate"
+        );
+
+        // The minor **width** is the line stroke's: it cannot resize a dot any more, so a
+        // style that asks for one builds exactly the same sprite.
         let wide = ground(
             &spec,
             &GridStyle {
@@ -1038,25 +1081,7 @@ mod tests {
                 ..GridStyle::default()
             },
         );
-        assert!(!wide.dots.is_empty());
-        assert_eq!(wide.dots.len() % 4, 0, "four corners per dot");
-        assert_eq!(wide.dot_indices.len(), wide.dots.len() / 4 * 6);
-        let square = &wide.dots[0..4];
-        let xs: Vec<f64> = square.iter().map(|v| f64::from(v.position[0])).collect();
-        let ys: Vec<f64> = square.iter().map(|v| f64::from(v.position[1])).collect();
-        let span = |values: &[f64]| {
-            values.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-                - values.iter().cloned().fold(f64::INFINITY, f64::min)
-        };
-        assert!((span(&xs) - 0.4).abs() < 1e-6, "0.4 across: {}", span(&xs));
-        assert!((span(&ys) - 0.4).abs() < 1e-6);
-        // It is centred on a lattice point (the minor step is 1).
-        let centre = (
-            xs.iter().sum::<f64>() / 4.0,
-            ys.iter().sum::<f64>() / 4.0,
-        );
-        assert!(centre.0.round().mul_add(1.0, -centre.0).abs() < 1e-6);
-        assert!(centre.1.round().mul_add(1.0, -centre.1).abs() < 1e-6);
+        assert_eq!(wide.dots, dots.dots);
     }
 
     /// Both forms **clip** a level that would be too dense, and neither is refused: the
@@ -1097,13 +1122,16 @@ mod tests {
             "clipped at the line budget: {reach}"
         );
 
-        // The dot form is capped much harder (one vertex per intersection), and it too
+        // The dot form is capped much harder (one sprite per intersection), and it too
         // clips instead of vanishing.
         spec.radius = 100.0;
         spec.minor = 0.25;
         let emitted = ground(&spec, &GridStyle::default());
         assert!(!emitted.dots.is_empty(), "still drawn");
-        assert!(emitted.dots.len() < 40_000, "inside the point budget");
+        assert!(
+            emitted.dots.len() / 4 < 40_000,
+            "inside the sprite budget"
+        );
         let reach = furthest(&emitted.dots);
         assert!(
             reach <= 0.25 * DOT_COLUMNS + 1e-3 && reach > 0.25 * DOT_COLUMNS - 0.5,
@@ -1131,7 +1159,13 @@ mod tests {
     #[test]
     fn a_workplane_grid_has_finer_steps_and_a_stronger_major() {
         let style = GridStyle::workplane();
+        assert_eq!(style.minor_alpha, WORKPLANE_MINOR_ALPHA);
+        assert_eq!(style.major_alpha, WORKPLANE_MAJOR_ALPHA);
         assert!(style.major_alpha > style.minor_alpha * 2.0 - 1e-6);
+        assert!(
+            style.minor_alpha > GridStyle::default().minor_alpha,
+            "a plane on a lit facet out-inks the ground over the void"
+        );
         assert_eq!(style.dim, 1.0);
     }
 
@@ -1357,23 +1391,25 @@ mod tests {
     }
 
     #[test]
-    fn the_dot_field_fits_its_point_budget() {
+    fn the_dot_field_fits_its_sprite_budget() {
         // A disc of radius `r` holds about `π · (r/minor)²` dots; the clip keeps it at
-        // `DOT_COLUMNS` columns whatever the radius, so the point budget always holds.
+        // `DOT_COLUMNS` columns whatever the radius, so the sprite budget always holds.
+        // Each dot is four vertices, and the budget is in dots.
+        let dots = |emitted: &Ground| emitted.dots.len() / 4;
         let mut dense = spec(100.0);
         dense.minor = 1.0;
         let emitted = ground(&dense, &GridStyle::default());
         assert!(!emitted.dots.is_empty());
-        assert!(emitted.dots.len() < 40_000);
+        assert!(dots(&emitted) < 40_000);
 
         for radius in [100.0, 1_000.0, 5_000.0] {
             let mut wide = spec(radius);
             wide.minor = 0.5;
             let emitted = ground(&wide, &GridStyle::default());
             assert!(
-                emitted.dots.len() < 40_000,
+                dots(&emitted) < 40_000,
                 "{radius}: {} dots",
-                emitted.dots.len()
+                dots(&emitted)
             );
         }
     }

@@ -223,7 +223,7 @@ Because the grid is a spec, switching planes is a state swap, not a mode. If the
 animated (120 ms, per the brief), animate the spec's plane and radius; the camera only
 moves when `view_workplane()` is invoked.
 
-## 3. The `WP` pill and the status bar
+## 3. The `WP` pill and the status toast
 
 - **The pill shows the plane, not the plumbing:** `WP: XY` when world, `WP: Face3` in
   cyan `CHROME_ACTIVE` when bound, `WP: View` for the camera plane. There is no state

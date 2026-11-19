@@ -154,10 +154,13 @@ What is **not** in the surface:
   grid is the product" true.
 
 `opacity` is a **multiplier**, not an absolute alpha. The token law is
-`minor_alpha = major_alpha = 0.15` for the world and `0.15 / 0.30` for a workplane
-(`grid.rs:33-41`, `:114-124`), and `GridStyle.dim` already occupies the "multiplier"
-role (`grid.rs:85-91`). It multiplies both styles, so the workplane's 1:2 ratio
-survives. A second absolute-alpha convention would let the API contradict
+`minor_alpha = major_alpha = 0.15` for the world and `0.30 / 0.60` for a workplane
+(`grid.rs`, `WORKPLANE_MINOR_ALPHA`), and `GridStyle.dim` already occupies the
+"multiplier" role (`grid.rs:85-91`). It multiplies both styles, so the workplane's
+1:2 ratio survives. The plane's larger pair is not a taste knob: the ground is drawn
+over the canvas void, while a bound plane sits on a lit facet (`GLASS_TOP`, linear
+luminance ≈ 0.106), where 0.15 of the structural ink blends into the glass. A second
+absolute-alpha convention would let the API contradict
 [`visual-language.md`](../interaction/visual-language.md) and would have to be reconciled with `dim`.
 The addon's stored `opacity` (default `0.65`, `InitGui.py:134-141`) is therefore read as
 a `0.65×` multiplier — a 35 % reduction of the token alpha, not "alpha 0.65" — an
@@ -195,12 +198,23 @@ callable). Clearing `adaptive` draws exactly the pair, and the chip returns to
 `minor_style` and the two widths are appearance, and the two backends implement them the
 same way:
 
-- `dots` draws a point at each minor intersection (the default). The native generator
-  emits a `Topology::Points` packet; the Coin shader takes the product of both axes'
-  coverage, which is a dot. `lines` draws the full lattice at the minor step instead.
-- A width of `1` is the hairline: the native generator keeps its `LineList`/`PointList`
-  (no quads at all) and the Coin shader its 1 px `line_cov`, so the default geometry and
-  cost are unchanged. A wider stroke is an **in-plane** stripe `width` wide — native
+- `dots` draws a mark at each minor intersection (the default). The native generator
+  emits **four vertices** there — one per corner, the corner itself in `uv` — and the
+  renderer's point-sprite stage (`vs_sprite`) expands them to `SPRITE_PX` (two) device
+  pixels after projection. The size is therefore in the shader, not in the geometry: it is
+  **not** part of the cached style, so a camera move never re-tessellates the field, and a
+  mark is the same two pixels at any depth. The Coin shader measures the distance to the
+  nearest intersection and draws a screen-space **disc** with a one-pixel feathered edge
+  (its radius comes from the fragment's pixel scale, floored at one pixel — the same two
+  pixels across), so the two backends draw the same mark. Neither may multiply the two
+  axes' hairline coverages: each falls to zero within a pixel of its line, so the product
+  peaked near a quarter and the field read as nothing beside lines carrying the same ink.
+  A one-device-pixel `PointList` dot is the mistake this replaced — a quarter of the Coin
+  disc's ink, phase-dependent, and faint on a HiDPI display. `lines` draws the full lattice
+  at the minor step instead.
+- A width of `1` is the hairline: the native generator keeps its `LineList` (no quads at
+  all), and the Coin shader its 1 px `line_cov`, so the default line geometry and cost are
+  unchanged. A wider stroke is an **in-plane** stripe `width` wide — native
   triangles through the *lit* stage (the ribbon stage's feather would eat half of a 2–4 px
   line; the 4× MSAA target antialiases instead) and the same in-plane distance test in the
   shader — with the host converting pixels to the plane's units at the plane origin
@@ -286,7 +300,10 @@ The shipping user-facing control is `FerroCAD.Grid` + the native grid. A user wh
 a different look changes `color`, `opacity` and `spacing`; they do not install a shader.
 When `grid_overlay` is on, the native **ground** is hidden rather than dimmed: two
 coplanar line grids z-fight even with a bias (bring-up §8.1). The triad stays under
-`axis_cross`, so orientation is never lost.
+`axis_cross`, so orientation is never lost. The authored grid is drawn in its own queue on
+the plane in force — **and**, while the pointer rests on a face a click would bind, once
+more on that candidate plane, after the first pass. A hover is a hint, not a state: it
+adds the candidate patch and never removes the grid on the current plane.
 
 ---
 
@@ -326,7 +343,7 @@ a workbench.
 | | **A1 — keep Coin, port the shader** | **A2 — thin client of Track C** |
 | --- | --- | --- |
 | What runs | The addon's tree: `SoSeparator` → `SoShaderProgram` → `SoFaceSet`, extracted and drawn | No tree, no shader; a dialog writes `FerroCAD.Grid` |
-| Knobs | All six, same defaults, same dialog meaning | Eight: the shared `FerroCAD.Grid` sizing rows (`minor`, `major`, `radius`) plus `enabled`, `color`, `opacity`, `shadows`, `shadow_opacity`; the two shadow knobs persist and validate, and now draw on the ground |
+| Knobs | All six, same defaults, same dialog meaning — except `color`, which is the **shared** `FerroCAD.Grid.color` whenever the semantic API exists (`#808080` survives only as the upstream fallback), so one ink reaches both backends | Eight: the shared `FerroCAD.Grid` sizing rows (`minor`, `major`, `radius`) plus `enabled`, `color`, `opacity`, `shadows`, `shadow_opacity`; the two shadow knobs persist and validate, and now draw on the ground |
 | Per-document | Kept (overlay registered per active document) | Replaced by the global native grid — **documented intent change** |
 | Visual result | The addon's look (line-only, decade LOD at `MIN_PX = 8.0`, `frag:19`) | The native look: the host's effective minor/major steps, the same `MINOR_PIXELS = 4.0` cull, and a radial patch fade (`grid.rs:136`) |
 | Live updates | Re-addition after a change; no live field aliasing | The native grid re-emits from `ViewState` |
@@ -515,7 +532,8 @@ name→slot mapping (or source templating) is a later capability, not part of th
 | 2 | Perspective flag | An explicit `flags.x` computed by the host from `Projection`, **not** inferred from the matrix. The GLSL tests `gl_ProjectionMatrix[2][3] != 0` (`frag:63`); reproducing that test is fragile across the projection builders and untestable without a GPU. An explicit flag is a unit test. |
 | 3 | Uniform-array packing | `array<vec4<f32>, 80>` with `o/4`, `o%4`; the 5-float stride becomes 8 bytes of padding per shadow slot. Chosen over a storage buffer for one fewer binding and no extra limit. |
 | 4 | `frag_depth` | Keep it. Without `@builtin(frag_depth)` the grid cannot be pinned behind model geometry that is outside the near/far range, which is exactly what `DEPTH_BIAS` + clamp accomplish (`frag:120-124`). Cost: the fragment writes depth explicitly, so the draw cannot be treated as depth-opaque; acceptable for one quad. |
-| 5 | **Clip-space convention** (not flagged in the bring-up) | WebGPU NDC z is `[0, 1]`, GL's is `[-1, 1]`. The vertex unprojection must use near `z = 0` and far `z = 1` (`vert:20-21` uses `-1/+1`), and the fragment must write `clip.z / clip.w + bias` **without** the `* 0.5 + 0.5` remap (`frag:123`). Getting this wrong shifts the reconstructed ray and the depth test. This is an inference from the WebGPU specification, not a measured result — no GPU was run. |
+| 5 | **Clip-space convention** (not flagged in the bring-up) | WebGPU NDC z is `[0, 1]`, GL's is `[-1, 1]`. The vertex unprojection must use near `z = 0` and far `z = 1` (`vert:20-21` uses `-1/+1`), and the fragment must write `clip.z / clip.w - bias` **without** the `* 0.5 + 0.5` remap (`frag:123`). Getting this wrong shifts the reconstructed ray and the depth test. This is an inference from the WebGPU specification, not a measured result — no GPU was run. |
+| 6 | **The bias sign** (found on a face-bound workplane) | `scene.wgsl` defines a positive `depth_bias` as *towards* the camera (`clip.z -= bias * clip.w`), and the native workplane grid draws at `WIRE_DEPTH_BIAS` (`ferrocad_stage::shape`), so it sits **on** the face it is bound to. The port added the bias in NDC instead of subtracting it, which pushed the patch behind that same face: the grid survived only outside the silhouette and washed out across the face — the Coin grid "dissolving into the face surface". The shader now subtracts the same `1e-5`, so the two backends put the grid at the same depth. |
 
 Two more porting details worth recording:
 
@@ -752,6 +770,12 @@ comparison mode, never that it requires it.
    [`visual-language.md`](../interaction/visual-language.md). Both are cheap to decide now (one store =
    `ParamGet`; A2 uses tokens) and expensive to unwind (bring-up §13.6). A1 may keep the
    addon's look *because it is a fixture*, but it must be labelled that way.
+   **Decided (colour):** `color` is a shared knob after all. The Coin backend reads and
+   writes `FerroCAD.Grid.color` through `setting`/`save_settings` like every other shared
+   row, so the theme token's default, a Settings edit, a console write and an edition's
+   appearance preset all reach the drawn lattice; the private `Mod/GridOverlayCoin` key is
+   only the fallback for an upstream build, and a value already stored there is migrated
+   into the shared store once (and only when the shared store has never held a colour).
 3. **The semantic API's "apply" is command-scoped.** A property write from the console
    is policy, not a repaint; only a command result reaches `apply_view`
    (`shell.rs:534-543`). Document it, and fix `finish_dialog` in G2 so the dialog path
@@ -864,8 +888,24 @@ overlay was not pulled until some other command applied a view.
 `Shell::enable_viewport` now runs `refresh_providers` for every feature with an active
 backend, which re-reads the same backend through `refreshProviders` and applies its
 claim. `set_grid_overlay` hides the native ground on **every** plane, world and bound
-alike; only the transient hover bloom stays native, because it previews a frame the view
-is not on yet.
+alike.
+
+**The candidate plane (2026-11-18; additive since 2026-11-18 later that day).** The hover
+preview used to stay native, because a mod cannot claim a plane the view is not on. The
+host now schedules that draw itself: the overlay a provider registers is tagged with the
+provider's feature (the facade passes it while `activate` runs, so no mod changes), the
+grid scene's program packets are compiled into their own queue, and the viewport draws them
+a second time in a `ViewSpec` whose `Frame` is the **candidate** plane — the frame the
+click will bind, derived from the same `ActiveWorkplane::view_workplane` call. That second
+pass comes **after** the pass on the plane in force, which still draws: a hover is a hint,
+not a state, so it must not take the current grid away (it did for a while, and blanking
+the grid a shape is being placed on flickered). The native hover layer yields its ground
+(`ground: !grid_overlay`) and keeps only its triad; a non-grid overlay never replays, so
+a HUD stays on the plane it was written for. The preview therefore shows the lattice with
+the provider's own shader, AA and `grid_axes`, and binding the face changes no renderer.
+Pinned by `a_grid_provider_previews_the_plane_the_click_binds` (the candidate frame equals
+the bound one, and the locked plane's pass stays) and
+`a_role_survives_a_re_registration_without_one`.
 
 **Deviations recorded.** `SoMFFloat` arrived with G3 rather than G0 (its consumer is
 `SoShaderParameterArray1f`). `spacing` sets `major = spacing × 10` so the dot/line

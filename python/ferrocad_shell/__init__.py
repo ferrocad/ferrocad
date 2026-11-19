@@ -384,6 +384,8 @@ def model_tree() -> str:
                 "label": doc.Label,
                 "active": doc.Name == active_name,
                 "objects": objects,
+                "undo_names": list(doc.UndoNames),
+                "redo_names": list(doc.RedoNames),
             }
         )
     return _json(docs)
@@ -1469,7 +1471,9 @@ def _delete_objects(doc, objects):
     except Exception as exc:  # noqa: BLE001 - one transaction, then report
         doc.abortTransaction()
         return {"status": f"delete failed: {exc}"}
-    return {"status": f"deleted {len(objects)} object(s)"}
+    if len(objects) == 1:
+        return {"status": f"deleted {objects[0].Label or objects[0].Name}"}
+    return {"status": f"deleted {len(objects)} objects"}
 
 
 class _MoveCommand:
@@ -1555,7 +1559,9 @@ def _move_selection(dx, dy, dz):
     except Exception as exc:  # noqa: BLE001 - one transaction, then report
         doc.abortTransaction()
         return {"status": f"move failed: {exc}"}
-    return {"status": f"moved {len(objects)} object(s)"}
+    if len(objects) == 1:
+        return {"status": f"moved {objects[0].Label or objects[0].Name}"}
+    return {"status": f"moved {len(objects)} objects"}
 
 
 def _visibility_of(obj) -> bool:
@@ -1697,7 +1703,9 @@ class _ToggleVisibilityCommand:
             doc.abortTransaction()
             return {"ok": False, "error": str(exc)}
         verb = "showed" if target else "hid"
-        return {"ok": True, "status": f"{verb} {len(objects)} object(s)"}
+        if len(objects) == 1:
+            return {"ok": True, "status": f"{verb} {objects[0].Label or objects[0].Name}"}
+        return {"ok": True, "status": f"{verb} {len(objects)} objects"}
 
 
 FreeCADGui.addCommand("App_Delete", _DeleteCommand())

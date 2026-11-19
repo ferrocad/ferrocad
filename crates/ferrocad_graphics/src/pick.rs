@@ -453,6 +453,7 @@ mod tests {
                 depth: Default::default(),
                 pickable: true,
                 ribbon: false,
+                sprite: false,
                 program: None,
             },
         }

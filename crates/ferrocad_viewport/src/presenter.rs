@@ -108,6 +108,22 @@ pub trait Presenter {
         Some(self.pick_at(queue, camera, device))
     }
 
+    /// Whether a frame this paint draws can only reach the window on a **later** paint.
+    ///
+    /// The dma-buf ring presents only a frame whose GPU completion fence has already
+    /// signalled, and that is never the frame the same paint submitted: a paint shows the
+    /// frame the previous paint drew. A host that knows this can present the frame in a
+    /// paint that draws nothing (see the viewport's `present_poll`), which is what makes a
+    /// discrete update — a click, a single hover move — visible in the event that made it
+    /// instead of on the next one.
+    ///
+    /// Defaults to `false`: a presenter that composites in the paint that drew it (the
+    /// same-device surface, a test double) has nothing to catch up on, and asking for an
+    /// extra paint would only repeat a frame that is already on screen.
+    fn defers_presentation(&self) -> bool {
+        false
+    }
+
     /// Whether a [`hover_pick_at`](Self::hover_pick_at) has been taken but not answered.
     ///
     /// The viewport asks so it can keep painting, and re-dispatch the hover, until the

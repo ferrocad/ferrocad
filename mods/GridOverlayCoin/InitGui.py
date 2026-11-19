@@ -39,7 +39,11 @@ its command (``docs/developer/workbenches/mod-providers.md``).
 Since S4 the backend advertises the canonical grid entries it owns through
 ``registerProvider(..., settings=...)``. The rows read and write through
 ``setting``/``save_settings``, so ``Settings/Grid`` and the drawn overlay share
-one store; ``enabled`` remains ``FerroCAD.Grid.enabled``. The
+one store. ``enabled`` stays ``FerroCAD.Grid.enabled``, and so does ``color``:
+the ink is the feature's one knob, so the theme token is the default, a
+``FerroCAD.Grid.color`` write (Settings tree, console, an edition's appearance
+preset) is the stored value, and this backend's private ``color`` key is only
+the fallback for a build with no semantic API. The
 ``GridOverlayCoin_Settings`` command is an alias of that node whenever a grid
 provider is registered, and its modal dialog stays as the fallback.
 """
@@ -74,6 +78,10 @@ WGSL_PATH = os.path.join(RESOURCES, "grid_overlay.wgsl")
 
 #: The same six knobs and defaults as the upstream add-on (`InitGui.py:134-141`),
 #: plus `grid_axes`, this backend's own switch for the in-plane X/Y lines.
+#:
+#: `color` is only this backend's **upstream** default now: on a FerroCAD build the
+#: ink is the shared `FerroCAD.Grid.color` (whose default is the theme's
+#: `GRID_INK`), so the two backends cannot drift apart.
 DEFAULTS = {
     "enabled": True,
     "opacity": 0.65,
@@ -96,9 +104,11 @@ FEATURE = "grid"
 BACKEND = "coin"
 
 #: The canonical schema entries this backend owns, mapped to the key each one
-#: uses in this mod's store (``enabled`` is the shared ``FerroCAD.Grid`` switch).
-#: ``base_spacing`` is the Coin shader's own scale knobs, not a grid knob, so it
-#: is not advertised: no invented entry appears in ``Settings/Grid``.
+#: uses in this mod's store. `enabled`, `color` and the sizing rows are the
+#: **shared** `FerroCAD.Grid` knobs, not private ones; the private keys are the
+#: fallback for a build with no semantic API. `base_spacing` is the Coin shader's
+#: own scale knob, not a grid knob, so it is not advertised: no invented entry
+#: appears in ``Settings/Grid``.
 COIN_SCHEMA_KEYS = {
     "enabled": "enabled",
     "color": "color",
@@ -148,17 +158,61 @@ def grid_api():
     return getattr(_ferrocad, "Grid", None)
 
 
+#: Whether the pre-routing private colour has been offered to the shared store.
+_ADOPTED_PRIVATE_COLOR = False
+
+
+def _adopt_private_color():
+    """Hand this backend's pre-routing ``color`` to ``FerroCAD.Grid``, once.
+
+    Before the routing existed, colour was the one *shared* grid knob this backend
+    kept to itself, so a ``FerroCAD.Grid.color`` write (or the edition's appearance
+    preset, or the theme token behind both) reached the native ground and stopped
+    there: the Coin lattice kept drawing the private value. The private key is a
+    fallback for a build without the semantic API now, so a value stored there is
+    moved into the shared store **only when that store has never held a colour**.
+    Presence, not equality: an explicit ``#808080`` is still a choice, and the
+    ``FerroCAD.Grid`` value the user may have set is the one they expect to see.
+
+    The private key is removed after a successful copy — one knob, one key — so a
+    later private write cannot resurrect a second source of truth. It stays in
+    place when the shared store already holds a colour (the dead value is left for
+    the user rather than silently discarded) and when there is no shared API.
+    """
+    global _ADOPTED_PRIVATE_COLOR
+    if _ADOPTED_PRIVATE_COLOR:
+        return
+    _ADOPTED_PRIVATE_COLOR = True
+    grid = grid_api()
+    if grid is None or _grid is None:
+        return
+    if _grid.stored("color") is not None:
+        return
+    private = str(SETTINGS.GetString("color", "")).strip()
+    if not private:
+        return
+    try:
+        grid.color = private
+    except ValueError:
+        # A malformed private value must not stop the mod loading: the shared
+        # default stands, and the dialog reports the bad colour when it is opened.
+        return
+    SETTINGS.RemString("color")
+
+
 def setting(key):
     """Read one knob, clamped exactly as the upstream ``setting()`` does.
 
-    ``enabled``, ``base_spacing`` and ``radius`` are the **shared**
+    ``enabled``, ``color``, ``opacity`` and the sizing rows are the **shared**
     ``FerroCAD.Grid`` knobs when the semantic API exists, not knobs of this mod:
-    the shell's grid toggle owns ``FerroCAD.Grid.enabled``, the Settings tree's
-    spacing/extent rows own ``minor``/``radius``, and the overlay has to follow
-    them. On upstream FreeCAD the private knobs are the fallback.
+    the shell's grid toggle owns ``FerroCAD.Grid.enabled``, the Settings tree owns
+    the ink and the spacing, and the overlay has to follow them. On upstream
+    FreeCAD the private knobs are the fallback.
     """
+    _adopt_private_color()
     if key in (
         "enabled",
+        "color",
         "adaptive",
         "minor_style",
         "major_width",
@@ -172,6 +226,8 @@ def setting(key):
         if grid is not None:
             if key == "enabled":
                 return bool(grid.enabled)
+            if key == "color":
+                return str(grid.color)
             if key == "adaptive":
                 return bool(grid.adaptive)
             if key == "minor_style":
@@ -207,10 +263,10 @@ def setting(key):
 def save_settings(values):
     """Persist the six dialog values; unknown keys are ignored.
 
-    ``enabled``, ``base_spacing`` and ``radius`` are written to the shared
-    ``FerroCAD.Grid`` when this build has it, so the settings dialog, the toolbar
-    toggle, the Settings tree and the drawn grid move together; on upstream
-    FreeCAD they stay this mod's own knobs.
+    ``enabled``, ``color``, ``opacity`` and the sizing rows are written to the
+    shared ``FerroCAD.Grid`` when this build has it, so the settings dialog, the
+    toolbar toggle, the Settings tree, the theme token's default and the drawn
+    grid move together; on upstream FreeCAD they stay this mod's own knobs.
     """
     grid = grid_api()
     if "enabled" in values:
@@ -254,7 +310,13 @@ def save_settings(values):
         else:
             SETTINGS.SetFloat("radius", float(values["radius"]))
     if "color" in values:
-        SETTINGS.SetString("color", str(values["color"]))
+        if grid is not None:
+            # One ink: the shared `FerroCAD.Grid.color`, so a Coin dialog edit and a
+            # `FerroCAD.Grid` write are the same value and the theme token stays the
+            # default the store falls back to.
+            grid.color = str(values["color"])
+        else:
+            SETTINGS.SetString("color", str(values["color"]))
     if "opacity" in values:
         if grid is not None:
             # The ink multiplier is shared: the host resolves both backends' level alphas

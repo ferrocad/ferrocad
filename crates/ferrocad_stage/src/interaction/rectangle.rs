@@ -18,7 +18,7 @@
 
 use ferrocad_types::Vector3;
 
-use crate::frame::drag_axes;
+use crate::frame::{drag_axes, vector};
 use crate::input::{MouseButton, PointerEvent, PointerKind};
 use crate::interaction::{CreationHost, HoverTarget, InteractionCommit};
 use crate::shape::ShapeItem;
@@ -204,6 +204,15 @@ impl Tool for RectangleTool {
         }
         self.hover = target.cloned();
         self.rebuild();
+    }
+
+    fn anchor(&self) -> Option<Vector3> {
+        // The first corner, once it is placed; before that the placement under the pointer.
+        self.first.map(vector).or_else(|| {
+            self.hover
+                .as_ref()
+                .map(|target| target.frame.origin)
+        })
     }
 
     fn items(&self) -> &[ShapeItem] {

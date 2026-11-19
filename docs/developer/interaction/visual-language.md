@@ -43,6 +43,12 @@ produces. The renderer consumes **linear** RGBA (`Rgba8UnormSrgb` target), and g
 consumes packed `0xRRGGBBAA`. A token is authoritative in one place and converted at
 the boundary — see §7.
 
+The same table is in the app: `Settings/Theme` in the model tree (and so in Dev Tools)
+lists each draw token read-only, as its sRGB hex with the ink it names as the chip, read
+from the constants (`crates/ferrocad_shell_doc/src/theme_settings.rs`). A token row is
+**not** editable — a stored setting wins over a token, so where one exists the refusal
+names it (`GRID_INK` → `Settings/Grid.color`, `AXIS_X` → `Settings/Axis.color_x`).
+
 ### 1.1 Canvas
 
 | Token | Value | Today |
@@ -65,11 +71,16 @@ triangle then paints the vertical `#0F1218 → #161B22` gradient; the
 | Hover rim | `#48E5FF` | 1.0 | `[0.065, 0.784, 1.0]` | proposed (state bloom) |
 | Snap aurora | `#38BDF8` | 0.85 | accent × 0.85 | `axis-origin-grid.md` |
 | Inactive structural | `#94A3B8` | 1.0 | `[0.296, 0.366, 0.479]` | `gizmo::INACTIVE_COLOR` |
-| Additive (push-pull) | `#F59E0B` | 1.0 | `[0.913, 0.342, 0.003]` | `gizmo::PUSH_PULL_COLOR` |
-| Subtractive (pocket) | `#EF4444` | 1.0 | `[0.863, 0.058, 0.058]` | `gizmo::SUBTRACT_COLOR` |
+| Grid / axis **default** ink | `#94A3B8` | 1.0 | `draw::GRID_INK` / `ui::GRID_INK` | `grid::GRID_COLOR`, the `FerroCAD.Grid.color` default; a user colour wins. One ink for **both** grid backends: the Coin shader reads `FerroCAD.Grid.color` through `setting("color")`, so the token, the Settings row and the drawn lattice cannot drift |
+| Axis stems | `#F87171` / `#4ADE80` / `#38BDF8` | 1.0 | `draw::AXIS_X/Y/Z` / `ui::AXIS_X/Y/Z` | `axis::AXIS_COLORS`, the `FerroCAD.Axis.color_*` defaults |
+| Preview ink | `#A78BFA` | 1.0 | `draw::PREVIEW_INK` / `ui::PREVIEW_INK` | every tool ghost's perimeter, the in-progress band and the anchor marker |
+| Additive (push-pull) | `#F59E0B` | 1.0 | `draw::ADDITIVE_INK` / `ui::PUSH_PULL_COLOR` | `gizmo::PUSH_PULL_COLOR` (the stem), the wheel's additive rows |
+| Subtractive (pocket) | `#EF4444` | 1.0 | `draw::SUBTRACTIVE_INK` / `ui::SUBTRACT_COLOR` | `gizmo::SUBTRACT_COLOR`, the `✗` hover ink |
 
 The four linear constants are the **reference implementation** of these tokens (see the
-conversion note in §1.7).
+conversion note in §1.7). The preview ink is deliberately its own accent — selection is
+cyan, additive amber, subtractive red — so "this is not geometry yet" has a state of its
+own, and the creation and the modify ghosts draw the same perimeter.
 
 ### 1.3 Surface glass
 
@@ -139,15 +150,18 @@ the shell bind the same constants.
 | Text | `#D8DBE0` | `ferrocad_theme::ui::FG` (viewport chrome, shell); `TITLE_FG`, `INPUT_FG` still local |
 | Muted | `#8B919A` | `ui::MUTED` (viewport chrome, shell) |
 | Face label | `rgba(235, 242, 252, 0.78)` | navicube `LABEL_COLOR ≈ [0.92, 0.95, 1.0, 0.80]` (`ferrocad_theme::navicube`) |
-| Glass background | `rgba(15, 18, 24, 0.75)` | pill `ui::GLASS` = `#151A24` @ 0.80 — tint and alpha still differ from the token |
+| Glass background | `rgba(15, 18, 24, 0.75)` | popovers and the search pill `ui::GLASS` / `ui::DOCK_BG`; the environment row is transparent, and each of its controls carries its own `ui::GLASS` pill |
 | Glass border | `#FFFFFF14` | pill, chrome `ui::CHROME_LINE` |
 | Dock glass | `#16181D` @ 0.90 | `ui::DOCK_BG` |
 | Dock border | `#FFFFFF` @ 0.12 | `ui::DOCK_BORDER` |
+| Toast glass | `#0F1218` @ 0.88 | `ui::TOAST_BG` |
+| Alert warning | `#FBBF24` | `ui::STATUS_WARNING` |
+| Alert error | `#F87171` | `ui::STATUS_ERROR` |
 | Wheel glass | `rgba(15, 18, 24, 0.75)` | `ui::WHEEL_GLASS` |
 | Floating command HUD | `rgba(15, 18, 24, 0.75)` + dock border | `ui::WHEEL_GLASS` + `ui::DOCK_BORDER`; no backdrop |
-| Field glass | `rgba(15, 18, 24, 0.75)` | `TextInput` background (`ui::WHEEL_GLASS`) |
-| Field hairline | `#FFFFFF14` | `TextInput` border at rest (`ui::CHROME_LINE`) |
-| Field focus ring | `#38BDF8` | `ui::ACTIVE_ACCENT` (`TextInput` border while focused) |
+| Field well | `#181C24` | `ui::FIELD_BG` — every numeric input (`TextInput`, and the creation row's parameter boxes) |
+| Field hairline | `#FFFFFF14` | field border at rest (`ui::CHROME_LINE`) |
+| Field focus ring | `#00E5FF` | `ui::FIELD_FOCUS` — the field's border and caret while it owns the keyboard |
 | Axis X token | `#F87171` (coral) | `ui::AXIS_X` (floating HUD label) |
 | Axis Y token | `#4ADE80` | `ui::AXIS_Y` (floating HUD label) |
 | Axis Z token | `#38BDF8` | `ui::AXIS_Z` (floating HUD label) |
@@ -373,7 +387,7 @@ needs a larger target, grow the **drawn** handle, not the invisible slop. Decisi
 
 ## 6. Pass-through indication
 
-When an overlay's interior passes a click through to the model, the status bar says so
+When an overlay's interior passes a click through to the model, the hover hint says so
 (`clicked through: navicube → Slab`). The mechanism is a small, neutral hover report from
 the viewport, not a workbench concept:
 
@@ -431,7 +445,7 @@ object (the toy does) but does not redefine the chrome tokens.
 | **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | **partial:** the leaf crate exists — `ferrocad_theme::ui` (packed sRGB), `draw` (linear, re-exported by `ferrocad_graphics::theme`) and `navicube` (the cube's palette) — with hex-conversion tests; the gizmo and remaining shell/widgets migration and the V0b sRGB-vs-linear normalisation (§1.6) are still open |
 | **V1 — occlusion** | `GHOST_DEPTH`; entity edge/surface defaults from the tokens; ghost wire + ghost triad | ✅ packet tests assert the front/ghost modes, the ghost is unpickable, and the grid counts include it. A full front-vs-ghost GPU readback is still worth adding alongside the existing depth-bias readback. |
 | **V2 — canvas & surfaces** | clear colour `#0F1218`; gradient; glass composites; two-tone threshold | ✅ `the_background_is_the_canvas_gradient` asserts `#0F1218`/`#161B22`; `a_two_tone_surface_reads_back_as_glass_top_and_shade` asserts both facets. V2c (true translucency) remains deferred. |
-| **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → status bar | a headless viewport test: at 13 px no bloom, at 11 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
+| **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → hover hint | a headless viewport test: at 13 px no bloom, at 11 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
 | **V4 — type & bevels** | bundle JetBrains Mono + fallback chain; pill 12 px semibold; tabular runs; twin-line bevels | the pill's digits do not change advance width across `0–9`; a chamfer renders two parallel lines in a readback |
 
 V0 is the only cross-cutting slice; V1–V4 are independent afterwards.

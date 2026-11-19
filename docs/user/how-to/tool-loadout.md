@@ -1,19 +1,19 @@
 # Switch tools with the loadout
 
 FerroCAD's pointer carries **one tool at a time**. The bar at the bottom-left of
-the 3-D view names the hand you have equipped, and `1`, `2`, `3` and `0` switch it:
+the 3-D view names the hand you have equipped, and `1`, `2`, `3` and `4` switch it:
 
 | Slot | Key | A drag with this hand | `Select ▾` default |
 | --- | --- | --- | --- |
 | **Move** | `1` | moves or rotates the selected body with the transform triad | Body |
 | **Push/Pull** | `2` | extrudes or pockets the face under the pointer | Face |
 | **Fillet** | `3` | fillets or chamfers the edge under the pointer | Edge |
-| **Inspect** | `0` | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
+| **Inspect** | `4` | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
 
 The active slot is lit in the bar. Push/pull and fillet appear only when the
 edition provides those controls (the Part workbench does); Move and Inspect are
 always there. Pressing `1` while Move is already equipped toggles it between
-Move and Rotate; from another pill, `1` equips Move with its arrows. `0` is
+Move and Rotate; from another pill, `1` equips Move with its arrows. `4` is
 Inspect, its own selection hand, not a paused Move.
 
 ## Move a body without selecting it first
@@ -45,7 +45,7 @@ You can also override the filter yourself: choose `Auto`, `Body`, `Face` or
 while the filter differs from the hand's default. A script that selects a
 sub-element reports the same filtered scope the window does.
 
-With **Inspect** (`0`) there is no triad to tell you what a click would grab, so
+With **Inspect** (`4`) there is no triad to tell you what a click would grab, so
 the viewport highlights it instead: hovering a body paints the whole body under
 `Body`, a `Face` filter paints the face, and an `Edge` filter paints the nearest
 drawn edge. The latched selection keeps its highlight when the pointer moves away.
@@ -89,7 +89,7 @@ filter as `Select ▾`, so the header and the in-context pill can never disagree
 - **A pending move or rotation locks the workspace.** While the `✗`/`✓` buttons are
   showing, switching tools, changing `Select ▾` or the handle set, selecting another
   object, dragging a different body, or starting an editing command (`Create Box`) is
-  **blocked** (the status line says "move pending" or "rotation pending"; the tool bar
+  **blocked** (the status toast says "move pending" or "rotation pending"; the tool bar
   dims), so nothing commits and nothing is lost by a stray click. View commands such as
   `Grid` or `Axes` still work. Finish with `✓` or `✗` and the gesture goes through.
 
@@ -97,9 +97,9 @@ filter as `Select ▾`, so the header and the in-context pill can never disagree
 
 | Key | Effect |
 | --- | --- |
-| `0` / `1` / `2` / `3` | equip Inspect / Move / Push/Pull / Fillet; while Slot 1 is active, `1` toggles Move ⇄ Rotate |
+| `1` / `2` / `3` / `4` | equip Move / Push/Pull / Fillet / Inspect; while Slot 1 is active, `1` toggles Move ⇄ Rotate |
 | `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
-| a digit other than `0`–`3`, `-` or `.` | focus the remembered field and start the number |
+| a digit other than `1`–`4`, `-` or `.` | focus the remembered field and start the number |
 | `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); cycle the rotate rings (`WLD` → `LOC` → `WP`) when no rotation is pending |
 | `Enter` | commit the pending move, or accept an open dialog |
 | `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
@@ -113,7 +113,7 @@ the triad (it stays away from the arrows and the measuring tape); `✓` is accen
 number) and hides while you are dragging: at rest there is nothing to finish, and the
 3-D ruler is not drawn either.
 The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
-tape live, but `0`–`3` still equip tools. `Tab` — or a digit other than `0`–`3`,
+tape live, but `1`–`4` still equip tools. `Tab` — or a digit other than `1`–`4`,
 `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in
 a field. Once a field is focused its digits belong to it. `✓`/`Enter` commits and
 resets the fields; `✗`/`Esc` rolls back. Neither closes the coordinates. Starting a

@@ -81,6 +81,13 @@ The finer 1 mm / 10 mm workplane style (`GridStyle::workplane()`) belongs to the
 preview** only: it is a hint that a face can be bound, and it must not make a bound grid
 look like a different object from the origin grid.
 
+The hover preview is a **hint, not a lock**, so it never takes a grid away: the world
+(and any active plane's) ground stays exactly as it is while the pointer rests on a face,
+and the preview patch is drawn on top at the plane's stronger ink. Hovering is transient —
+the pointer moves and the patch goes — and displacing the grid a shape is being placed on
+flickered. What *does* replace the world ground is a **bound** plane (§8.5): that is a
+state, not a hint.
+
 ## 3. The top-left spatial strip
 
 In `[ • Grid ▾ ][ • Axes ▾ ][ WP ▾ ][ • Gizmo ▾ ][ • Snap ▾ ]`:
@@ -273,16 +280,30 @@ suppression is therefore a *default*, not a lock — which is what keeps body tr
 reachable from any selection. The Move HUD keeps anchoring at the body datum, the same
 point the triad uses.
 
-### 8.5 The hover bloom is tool-scoped
+### 8.5 The hover preview is tool-scoped
 
-The hover bloom (a local grid on the face under the pointer) appears only when a
+The hover preview (a local grid on the face under the pointer) appears only when a
 **creation tool** is active **and** the active plane is still the default — because that
 is when it previews something a click will actually do (bind the plane for the session).
-Once the tool's first click binds a face, the plane is no longer the default, so the bloom
+Once the tool's first click binds a face, the plane is no longer the default, so the preview
 stops and later hovers during the session add no competing grids. With no tool, hovering
 keeps the face *tint* (the click feedback) and the `HoverReport`, but adds no second grid;
 `Set WP` in the wheel is one gesture away and needs no preview. The predicate is inferred
 from the tool and plane state — nothing is configured.
+
+The preview is **additive**, because it is a hint about what a click would do and not a
+state: the ambient (or bound) grid keeps its ink while the patch is up, and only the patch
+comes and goes with the pointer. It used to replace the ambient ground the way a bound
+plane does, which meant that placing a shape on the grid and then resting the pointer on
+the shape blanked the grid the shape was placed on. If the platform ever needs a stronger
+separation, the two states are already distinct in the viewport: `hover_candidate`
+(transient, gated on the tool and the default plane) versus `active_workplane` (sticky
+until `Esc` or another activation).
+
+When the active grid is the authored (Coin) provider, the preview is a second `ViewSpec`
+that replays the provider's program on the candidate frame, drawn **after** the pass on the
+plane in force — so the provider draws both, and the native layer contributes only their
+triads; see the [grid overlay plan](../workbenches/grid-overlay-plan.md).
 
 ### 8.6 Review round, 2026-10-29
 

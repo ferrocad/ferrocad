@@ -1169,6 +1169,23 @@ fn a_refused_commit_re_arms_the_handle(cx: &mut TestAppContext) {
     let status = model.lock().unwrap().status.clone();
     assert!(status.contains("the kernel refused it"), "{status}");
 
+    // The refusal wrote nothing, so the alert carries only its dismiss: a chip here
+    // would promise to undo a transaction that does not exist.
+    draw(&mut cx);
+    let id = shell
+        .read_with(&cx, |shell, _| shell.status_toasts.last().map(|toast| toast.id))
+        .expect("the refusal toasted");
+    let undo: &'static str = Box::leak(format!("toast-undo-{id}").into_boxed_str());
+    let card: &'static str = Box::leak(format!("status-toast-{id}").into_boxed_str());
+    assert!(
+        cx.debug_bounds(undo).is_none(),
+        "a refused edit offers no Undo"
+    );
+    assert!(
+        cx.debug_bounds(card).is_some(),
+        "the alert can still be clicked away"
+    );
+
     // The handle is still there, at rest: no ghost, nothing to accept.
     let fields = shell
         .read_with(&cx, |shell, cx| shell.armed_numeric_fields(cx))
@@ -3322,6 +3339,89 @@ fn a_creation_pill_places_on_the_bare_workplane(cx: &mut TestAppContext) {
     );
 }
 
+/// The box's finish pair is the **shared decision pill**, floating beside the box.
+///
+/// The completion row keeps the numbers and the hint; the control that ends the session
+/// lives in context at the tool's own anchor (`Tool::anchor` →
+/// `InventorViewport::tool_finish_anchor`), so it sits by the corner the box grows from —
+/// not inside the docked row, and not under the pointer where the next click lands. Move
+/// and a released manipulator put the same pill in the same relation to their work.
+#[gpui::test]
+fn a_box_finish_pair_floats_beside_the_box(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(crate::Contributions::new().with_tool("box", || {
+                Box::new(ferrocad_stage::BoxTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("box", cx);
+        })
+    });
+    draw(&mut cx);
+    draw(&mut cx);
+
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    // Nothing placed yet: the tool has a hover ghost but no pair to offer.
+    assert!(
+        cx.debug_bounds("tool-finish-pill").is_none(),
+        "an armed tool that has placed nothing offers no pair"
+    );
+
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    // Well off the body, so the placement is the bare workplane.
+    let empty = canvas.center() + gpui::point(px(-500.), px(300.));
+
+    // Settle the element size first: starting the tool changes the shell's layout, and the
+    // camera adopts the new size one prepaint later, which would re-map the click point
+    // under the box (see `a_box_pill_snaps_to_the_visible_grid`).
+    let mut settled = None;
+    for _ in 0..6 {
+        cx.simulate_mouse_move(empty, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+        let size = viewport.read_with(&cx, |viewport, _| viewport.camera().viewport.device_size());
+        if settled == Some(size) {
+            break;
+        }
+        settled = Some(size);
+    }
+
+    cx.simulate_mouse_down(empty, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(empty, MouseButton::Left, gpui::Modifiers::default());
+    // Two frames: the pair's own measured size places it on the second.
+    draw(&mut cx);
+    draw(&mut cx);
+
+    let anchor = viewport
+        .read_with(&cx, |viewport, _| viewport.tool_finish_anchor())
+        .expect("the anchored box publishes its corner");
+    let pill = cx.debug_bounds("tool-finish-pill").expect("the pair is drawn");
+    let row = cx.debug_bounds("tool-strip").expect("the completion row");
+    assert!(
+        !row.contains(&pill.origin),
+        "the pair floats, it is not part of the docked row ({row:?} / {pill:?})"
+    );
+    assert!(cx.debug_bounds("tool-cancel").is_some(), "the cancel segment");
+    assert!(cx.debug_bounds("tool-finish").is_some(), "the finish segment");
+    // `place_finish_with` puts the pill's centre one `distance` (46 px) into the empty
+    // octant — bottom-right when there is nothing to repel from.
+    let offset = [
+        pill.center().x.0 - anchor.x.0,
+        pill.center().y.0 - anchor.y.0,
+    ];
+    assert!(
+        (offset[0] - 32.5).abs() < 12.0 && (offset[1] - 32.5).abs() < 12.0,
+        "the pair sits beside the box's corner, not at it: {offset:?} from {anchor:?}"
+    );
+}
+
 /// A **parameter** pill snaps to the visible grid and anchors there, not only on a body.
 ///
 /// The box's preview is driven by its placement frame rather than a clicked point, so it
@@ -3363,7 +3463,12 @@ fn a_box_pill_snaps_to_the_visible_grid(cx: &mut TestAppContext) {
             }
         });
     });
+    // The camera adopts the element's size at the **next** prepaint, and starting the
+    // tool changes the shell's layout (its strip appears), which shortens the canvas.
+    // Two more frames settle it before a point is mapped through the canvas.
     draw(&mut cx);
+    draw(&mut cx);
+
     let corner = |cx: &VisualTestContext| -> Option<[f32; 3]> {
         viewport.read_with(cx, |viewport, _| {
             viewport
@@ -3398,9 +3503,11 @@ fn a_box_pill_snaps_to_the_visible_grid(cx: &mut TestAppContext) {
     );
     let anchor = corner(&cx).expect("the anchored box");
     assert!(
-        (anchor[0] - preview[0]).abs() < 1e-3
-            && (anchor[1] - preview[1]).abs() < 1e-3
-            && (anchor[2] - preview[2]).abs() < 1e-3,
-        "it anchored where the ghost was: {anchor:?} vs {preview:?}"
+        anchor[2].abs() < 1e-6,
+        "the box still sits on the world XY plane: {anchor:?}"
     );
+    // That the anchor is *the point the ghost was previewing* is pinned by
+    // `a_click_anchors_the_box_where_its_ghost_was` in `ferrocad_viewport`, where the
+    // camera cannot move under the pointer between the two events (the shell's canvas
+    // height settles asynchronously, which re-maps the same logical point).
 }

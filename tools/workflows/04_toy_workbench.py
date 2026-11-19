@@ -174,8 +174,8 @@ def run(cap):
             "The Toy edition window with the Wide slab beside the sample slab",
             caption=(
                 "The same document opened in the Toy edition. The viewport draws both "
-                "slabs, the header carries the workbench's controls, and the dock is the "
-                "shell's own chrome rather than the workbench's."
+                "slabs, the header carries the workbench's environment controls, and the "
+                "shell's own chrome around it is not the workbench's."
             ),
         )
 

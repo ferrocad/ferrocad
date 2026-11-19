@@ -64,9 +64,9 @@ top-left pill:
 | `Draft_Snap_Lock` | `FerroCAD_Surface: "snap"` | the label: flips `isEnabled()`; the mode mask survives a lock |
 | `Draft_Snap_Grid`, `…_Endpoint`, `…_Midpoint`, `…_Center`, `…_Origin`, `…_Vertex` | `FerroCAD_Surface: "snap"`, `FerroCAD_Parent: "Draft_Snap_Lock"`, `FerroCAD_Short: "<mode>"` | the caret's checklist |
 
-Declaring the parent is what keeps the modes out of the dock: the dock renders
-only commands whose surface is `dock`, so the left column stays the globals plus
-`Search`. `FerroCAD_Short` lets the popover show `Grid` where `Snap Grid` would repeat
+Declaring the parent is what keeps the modes out of the globals chrome: the title bar and
+navicube bar render only their own actions, so the globals stay the globals plus `Search`.
+`FerroCAD_Short` lets the popover show `Grid` where `Snap Grid` would repeat
 the control's name; the palette still searches the full `MenuText`. The modes are
 **state** rows (they declare `Checkable`), so clicking one leaves the popover open and
 a mask can be set in one visit; the dot follows `IsChecked`, and the menu closes on an

@@ -61,3 +61,44 @@ pub const EDGE_OCCLUDED: [f32; 4] = [0.672443, 0.745404, 0.871367, 0.10];
 
 /// The alpha multiplier for a ghost pass (the occluded-edge token's alpha).
 pub const GHOST_ALPHA: f32 = 0.10;
+
+// -- Operation and preview accents -----------------------------------------
+
+/// The grid and axis **default ink** (`#94A3B8`, linear here): what the native grid and
+/// the axis cross draw when the settings have no override, and what a provider overlay
+/// receives as its starting colour.
+///
+/// This is a default, not a law: `FerroCAD.Grid.color` / `FerroCAD.Axis.color_*` are
+/// the user's settings (FerroCAD extensions, not upstream names) and win when set. The
+/// token exists so the two backends, both editions and the Python defaults cannot drift
+/// apart.
+pub const GRID_INK: [f32; 4] = [0.296138, 0.366253, 0.479320, 1.0];
+
+/// The X axis default ink (`#F87171`, linear here).
+pub const AXIS_X: [f32; 4] = [0.938686, 0.165132, 0.165132, 1.0];
+
+/// The Y axis default ink (`#4ADE80`, linear here).
+pub const AXIS_Y: [f32; 4] = [0.068478, 0.730461, 0.215861, 1.0];
+
+/// The Z axis default ink (`#38BDF8`, linear here).
+pub const AXIS_Z: [f32; 4] = [0.039546, 0.508881, 0.938686, 1.0];
+
+/// A tool's **preview ink** (`#A78BFA`, linear here): the ghost's perimeter, the
+/// in-progress band and the anchor marker.
+///
+/// One token covers the creation and the modify ghosts, and it owns an accent no other
+/// state uses — selection is cyan, additive amber, subtractive red — so "not geometry
+/// yet" reads as its own state rather than borrowing the operation's colour. The ghost's
+/// fill is the surface glass; this is only its perimeter.
+pub const PREVIEW_INK: [f32; 4] = [0.386429, 0.258183, 0.955973, 1.0];
+
+/// Additive operations (`#F59E0B`, linear here): the push/pull stem, an extrude or pad.
+///
+/// The renderer-side twin of [`crate::ui::PUSH_PULL_COLOR`]; the stem and the wheel's
+/// additive rows share the one accent.
+pub const ADDITIVE_INK: [f32; 4] = [0.913099, 0.341914, 0.003347, 1.0];
+
+/// Subtractive operations (`#EF4444`, linear here): the cut badge, a pocket or delete.
+///
+/// The renderer-side twin of [`crate::ui::SUBTRACT_COLOR`].
+pub const SUBTRACTIVE_INK: [f32; 4] = [0.863157, 0.057805, 0.057805, 1.0];

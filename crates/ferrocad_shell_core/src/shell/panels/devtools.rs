@@ -45,7 +45,7 @@ impl Shell {
             } else {
                 "panels: closed"
             };
-            self.model.lock().unwrap().status = status.to_string();
+            self.model.lock().unwrap().note_status(status.to_string());
             cx.notify();
             return status.to_string();
         }
@@ -88,14 +88,14 @@ impl Shell {
                     });
                     shell.update(cx, |shell, cx| {
                         shell.dev_tools = Some(handle);
-                        shell.model.lock().unwrap().status = "dev tools: open".to_string();
+                        shell.model.lock().unwrap().note_status("dev tools: open".to_string());
                         cx.notify();
                     });
                 }
                 Err(error) => {
                     shell.update(cx, |shell, cx| {
                         let status = format!("dev tools: cannot open a window ({error})");
-                        shell.model.lock().unwrap().status = status.clone();
+                        shell.model.lock().unwrap().note_status(status.clone());
                         shell.console_line(status, cx);
                         cx.notify();
                     });

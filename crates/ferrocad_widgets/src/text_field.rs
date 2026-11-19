@@ -17,11 +17,11 @@ use gpui::{
 
 use crate::events::{ChangeEvent, RejectedChar, SubmitEvent};
 use crate::text_buffer::TextBuffer;
-use ferrocad_theme::ui::{ACTIVE_ACCENT, CHROME_LINE, WHEEL_GLASS};
+use ferrocad_theme::ui::{CHROME_LINE, FIELD_BG, FIELD_FOCUS};
 
 const INPUT_FG: u32 = 0xd8dbe0;
 const INPUT_PLACEHOLDER: u32 = 0x6b7280;
-const CARET: u32 = 0x7aa2f7;
+const CARET: u32 = FIELD_FOCUS;
 const SELECTION: u32 = 0x3311ff30;
 
 /// A single-line editable text field.
@@ -563,17 +563,20 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The dielectric field: glass over the canvas, a hairline at rest and the
-        // state accent while focused, so the axis a keystroke will edit is obvious.
+        // The recessed field: an opaque well (`FIELD_BG`) with a hairline at rest and the
+        // electric-cyan ring while focused, so the axis a keystroke will edit is obvious.
+        // Every numeric form — Move, a manipulator, a creation parameter — is this widget,
+        // so the field language is one control.
         let focused = self.focus_handle.is_focused(window);
         div()
             .w_full()
             .h(px(28.))
             .px_2()
-            .bg(rgba(WHEEL_GLASS))
+            .rounded_sm()
+            .bg(rgb(FIELD_BG))
             .border_1()
             .border_color(if focused {
-                rgb(ACTIVE_ACCENT)
+                rgb(FIELD_FOCUS)
             } else {
                 rgba(CHROME_LINE)
             })

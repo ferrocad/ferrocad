@@ -17,9 +17,24 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::Scene;
 
-fn entries() -> &'static Mutex<Vec<(usize, Scene)>> {
-    static OVERLAYS: OnceLock<Mutex<Vec<(usize, Scene)>>> = OnceLock::new();
+fn entries() -> &'static Mutex<Vec<(usize, Option<String>, Scene)>> {
+    static OVERLAYS: OnceLock<Mutex<Vec<(usize, Option<String>, Scene)>>> = OnceLock::new();
     OVERLAYS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// A registered overlay scene and the provider feature that registered it, when known.
+///
+/// The role is what lets a host treat one overlay differently from the rest without
+/// the mod naming itself: a scene registered while the `grid` provider activates is the
+/// grid, and the viewport replays **it** on a candidate plane (the hover bloom) rather
+/// than duplicating every overlay onto a plane its author never asked for. A scene with
+/// no role still draws; it is simply never replayed on a second plane.
+#[derive(Clone, Debug)]
+pub struct OverlayScene {
+    /// The provider feature the scene belongs to (`"grid"`), if the host knows it.
+    pub role: Option<String>,
+    /// The extracted root.
+    pub scene: Scene,
 }
 
 /// Overlays registered by name rather than by object identity.
@@ -42,12 +57,26 @@ static OVERLAYS_DIRTY: AtomicBool = AtomicBool::new(false);
 /// extraction (value semantics), so later mutations on the producer side are
 /// invisible until the node is registered again.
 pub fn put(key: usize, scene: Scene) {
+    put_with_role(key, scene, None);
+}
+
+/// [`put`] with the provider feature that owns the scene.
+///
+/// A re-registration that passes no role keeps the one already stored: a mod
+/// re-extracts its overlay from a settings callback as well as from a provider
+/// callback, and only the latter knows the feature.
+pub fn put_with_role(key: usize, scene: Scene, role: Option<String>) {
     let mut entries = entries()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match entries.iter_mut().find(|(existing, _)| *existing == key) {
-        Some((_, slot)) => *slot = scene,
-        None => entries.push((key, scene)),
+    match entries.iter_mut().find(|(existing, _, _)| *existing == key) {
+        Some((_, stored, slot)) => {
+            *slot = scene;
+            if role.is_some() {
+                *stored = role;
+            }
+        }
+        None => entries.push((key, role, scene)),
     }
     OVERLAYS_DIRTY.store(true, Ordering::Release);
 }
@@ -58,7 +87,7 @@ pub fn remove(key: usize) -> bool {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let before = entries.len();
-    entries.retain(|(existing, _)| *existing != key);
+    entries.retain(|(existing, _, _)| *existing != key);
     let removed = entries.len() != before;
     if removed {
         OVERLAYS_DIRTY.store(true, Ordering::Release);
@@ -143,16 +172,34 @@ pub fn dirty() -> bool {
 /// this is the pull half of the bridge. The shell merges the returned roots into the
 /// viewport's draw without re-extracting or recompiling anything else.
 pub fn take_scenes() -> Vec<Scene> {
+    take_scenes_with_roles()
+        .into_iter()
+        .map(|overlay| overlay.scene)
+        .collect()
+}
+
+/// [`take_scenes`] carrying each scene's provider role.
+///
+/// A host that only draws the scenes uses [`take_scenes`]; one that must tell the grid
+/// from the rest (a candidate-plane replay) reads the roles here. Named overlays carry
+/// no role: a page names its scenes for replacement, not for a provider feature.
+pub fn take_scenes_with_roles() -> Vec<OverlayScene> {
     let entries = entries()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let named = named_entries()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let scenes: Vec<Scene> = entries
+    let scenes: Vec<OverlayScene> = entries
         .iter()
-        .map(|(_, scene)| scene.clone())
-        .chain(named.iter().map(|(_, scene)| scene.clone()))
+        .map(|(_, role, scene)| OverlayScene {
+            role: role.clone(),
+            scene: scene.clone(),
+        })
+        .chain(named.iter().map(|(_, scene)| OverlayScene {
+            role: None,
+            scene: scene.clone(),
+        }))
         .collect();
     // Clear under the locks: an add between the clone and the store would otherwise
     // lose its dirty notification.
@@ -192,6 +239,35 @@ mod tests {
         assert!(remove_named("axis"));
         assert!(named_keys().is_empty());
         assert!(!remove_named("axis"), "removing twice is a no-op");
+        clear();
+    }
+
+    #[test]
+    fn a_role_survives_a_re_registration_without_one() {
+        clear();
+        put_with_role(7, scene(), Some("grid".to_string()));
+        let scenes = take_scenes_with_roles();
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].role, Some("grid".to_string()));
+
+        // A settings callback re-extracts the tree without knowing the feature: the
+        // role is a property of who registered the scene, not of this update.
+        put_with_role(7, scene(), Some("grid".to_string()));
+        put(7, scene());
+        let scenes = take_scenes_with_roles();
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].role, Some("grid".to_string()));
+
+        // A named overlay (a page) carries no role, and `take_scenes` drains the same
+        // set without exposing the roles.
+        remove(7);
+        put_named("axis", scene());
+        let scenes = take_scenes_with_roles();
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].role, None);
+
+        put_named("axis", scene());
+        assert_eq!(take_scenes().len(), 1);
         clear();
     }
 

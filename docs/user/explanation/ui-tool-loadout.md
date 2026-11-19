@@ -12,7 +12,7 @@ switches it.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-loadout-desktop-window.png" alt="The tool loadout highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-loadout-desktop.png" alt="Close-up of the tool loadout">
-<figcaption><strong>Desktop</strong> — the four slots: <code>1 Move</code>, <code>2 Push/Pull</code>, <code>3 Fillet</code> and <code>0 Inspect</code>. The active slot is drawn in accent ink over a tinted background.</figcaption>
+<figcaption><strong>Desktop</strong> — the four slots: <code>1 Move</code>, <code>2 Push/Pull</code>, <code>3 Fillet</code> and <code>4 Inspect</code>. The active slot is drawn in accent ink over a tinted background.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-loadout-web-window.png" alt="The tool loadout highlighted in the browser build">
@@ -24,11 +24,11 @@ switches it.
 ![Switching hands with the loadout](../images/ui-tools.gif)
 
 *Animation (desktop): click a body, then switch hands with `1` (Move/Rotate), `2`, `3`
-and `0`. Each hand re-picks its target so the relevant handles appear.*
+and `4`. Each hand re-picks its target so the relevant handles appear.*
 
 ## The bar
 
-The bar reads `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` and shares its baseline and
+The bar reads `[1 Move] [2 Push/Pull] [3 Fillet] [4 Inspect]` and shares its baseline and
 its glass with the create dock, which sits right after it in the same bottom row. Each slot
 shows its key, a glyph and a label. The slot you are holding
 is drawn in accent ink over a tinted background; a click equips it exactly as its key
@@ -59,7 +59,7 @@ feature's kind, so re-opening it edits it rather than stacking a second dress-up
 | `1` | **Move** / **Rotate** | moves or rotates the selected body with the transform triad | Body |
 | `2` | **Push/Pull** | extrudes or pockets the face under the pointer | Face |
 | `3` | **Fillet** / **Chamfer** | rounds or bevels the edge under the pointer; `3` again toggles which | Edge |
-| `0` | **Inspect** | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
+| `4` | **Inspect** | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
 
 The bar always lists all four slots. Push/Pull and Fillet do something where the edition
 supplies the matching manipulator (the Part workbench does); Move and Inspect are always
@@ -72,14 +72,15 @@ Right after the bar sits the **create dock**: one pill per category, each naming
 it was last left on. It is always there — nothing folds it away.
 
 ```
-[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 4 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
 ```
 
 - The **left half** of a pill is that pill's *slot*: pressing its key and clicking it do
   the same thing. Each pill shows its key in front of the `⊕` (`5 Sketch: Rectangle`), the
-  way the Modify bar shows `1 Move`, because the two hands are **one set of digits**: `1`–`3`
-  and `0` equip the Modify hand, and `5`–`9` are the create dock's pills — `5` Sketch,
-  `6` Solid, `7` Surface, `8` Text, `9` Mesh. `4` is not bound to anything.
+  way the Modify bar shows `1 Move`, because the two hands are **one contiguous set of
+  digits**: `1`–`4` equip the Modify hand, and `5`–`9` are the create dock's pills — `5`
+  Sketch, `6` Solid, `7` Surface, `8` Text, `9` Mesh. The row reads `1 2 3 4 5 6 7 8 9`
+  with no gap.
 - Pressing a pill's key **selects** it and starts the tool it names; the pill lights up,
   like the hand the Modify bar is holding — and the Modify bar stops lighting its slot at
   the same time, because only one hand owns the canvas. Pressing the same key again **steps
@@ -91,8 +92,9 @@ skipped rather than selected.
   only its hover ghost — the anchor marker in the placement plane, for a two-click tool —
   and no row at all; once a click places a point (or the tool's numbers are its input) its
   **completion row** appears in the bottom-left column, directly above the slots, with the
-  tool's name, its numbers or point count, its hint and the `✗`/`✓` pair. The slots, the
-  dock and Search stay where they were while you draw.
+  tool's name, its numbers or point count, its hint and the `✗`/`✓` pair. The numeric
+  fields are the same boxed inputs the Move and manipulator rows use: click one (or `Tab`
+  to it) and type. The slots, the dock and Search stay where they were while you draw.
 - **The camera still works while a pill is armed.** Dragging anywhere — over the plane,
   over a body, over empty space — orbits the view exactly as it does with no tool: a press
   is only a click once you let go without moving. The tool's ghost follows the pointer the
@@ -108,11 +110,10 @@ skipped rather than selected.
   what it caught; a vertex, edge midpoint or face centre within about 10 px wins over the
   grid. Hide the grid and the point sits exactly under the pointer. The anchor marker
   follows the pointer across all of it, so creating is never limited to hovering a body.
-- Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
-  category with no tools is not shown) and only that category's tools below it. Picking a
-  tool puts it in its pill and starts it; clicking a **category** tab just shows that
-  category's tools and points its pill at the tool it was last left on, so nothing starts
-  until you pick one.
+- Clicking `▾` opens that pill's flyout: its own category's tools, and nothing else. The
+  row of pills is the category choice, so the list has no header of tabs — opening a
+  different category is that pill's `▾` (or `Create ▸` on the wheel). Picking a tool puts
+  it in its pill and starts it; opening a list starts nothing.
 - The list is **numbered**: press `1`–`8` while it is open to pick that tool into its
   pill without moving the pointer. A row that needs a selection says so instead (for
   example `select at least 2 profiles` for Loft). The caret reads `^` while a pill's list

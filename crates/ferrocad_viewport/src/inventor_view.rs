@@ -30,6 +30,7 @@ use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
     Scene, ViewSpec, compile_diagnostic,
 };
+use ferrocad_inventor::overlays::OverlayScene;
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
@@ -40,7 +41,9 @@ use ferrocad_stage::{
     feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, point_segment_distance, project_device, scale_for};
-use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
+use ferrocad_theme::ui::{
+    CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED, WHEEL_GLASS,
+};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
     AnyElement, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, EventEmitter, FocusHandle,
@@ -434,7 +437,7 @@ impl ActiveWorkplane {
             major_alpha: base_ink(self.extent, policy).1,
             minor_lines: policy.minor_style == grid::MinorStyle::Lines,
             major_width: stroke_width(camera, plane, policy.major_width) as f32,
-            minor_width: stroke_width(camera, plane, policy.minor_width) as f32,
+            minor_width: minor_width(camera, plane, policy) as f32,
         }
     }
 
@@ -680,6 +683,24 @@ pub struct InventorViewport<V: InventorView> {
     /// depth-tested pass, and can never enter a pick. Their parameters carry the scene's
     /// ground-shadow block (see [`shadow_footprints`](Self::shadow_footprints)).
     program_queue: RenderQueue,
+    /// The **grid provider's** program packets, compiled apart from
+    /// [`program_queue`](Self::program_queue).
+    ///
+    /// The hover bloom's copy of the grid overlay's program packets: the same shader and
+    /// the same ABI as the bound plane, with **no** shadow block (the stage's footprints
+    /// are measured in the active plane's `(u, v)` frame, which is the wrong frame for a
+    /// candidate). A second `ViewSpec` draws it while the pointer rests on a face, so the
+    /// plane a click binds is drawn by the backend the rest of the grid already uses.
+    ///
+    /// Only the overlay registered under [`GRID_OVERLAY_ROLE`] lands here, so a HUD or a
+    /// gizmo overlay is never duplicated onto a plane its author did not ask for. Empty
+    /// when no grid overlay is registered.
+    grid_program_queue: RenderQueue,
+    /// The grid overlay's program packets as the **bound** plane draws them (shadows and
+    /// stage bounds applied). The authored grid is never part of
+    /// [`program_queue`](Self::program_queue): keeping it apart is what lets the hover
+    /// state drop the active-plane copy without dropping the other overlays with it.
+    grid_main_queue: RenderQueue,
     /// Explicit ground-shadow footprints (world `x`/`y`), or `None` to derive them from
     /// the [`stage`](Self::stage) on every recompile. A host whose document is not a
     /// `Stage` (the legacy inventor path) sets these with
@@ -689,8 +710,10 @@ pub struct InventorViewport<V: InventorView> {
     /// malformed program is dropped, not the scene); the shell reports and clears it.
     shader_error: Option<String>,
     /// Pull-registered overlay scenes (G5). Merged under a synthetic separator beside
-    /// the base scene on every recompile; the base scene itself is never modified.
-    overlays: Vec<Scene>,
+    /// the base scene on every recompile; the base scene itself is never modified. A
+    /// scene carries the provider feature that registered it, which is how the grid
+    /// overlay is told apart from the rest.
+    overlays: Vec<OverlayScene>,
     /// The last pointer position in **device** pixels (bottom-left origin), for the
     /// workplane origin's proximity bloom.
     pointer: Option<[i32; 2]>,
@@ -724,15 +747,34 @@ pub struct InventorViewport<V: InventorView> {
     /// invalidation. Such a paint only collects the completed image; it does not
     /// redraw the scene (which would start another readback and spin).
     readback_poll: bool,
-    /// A real paint arrived while a readback was in flight, so the completed image is
-    /// stale and the scene is drawn again as soon as it lands.
-    readback_dirty: bool,
+    /// The next paint was requested only so the **presenter** can hand over the frame the
+    /// previous paint drew. Such a paint does not submit a frame of its own: the dma-buf
+    /// ring only presents a frame whose GPU completion fence has already signalled, so the
+    /// paint that draws a frame shows the one before it. A continuous gesture paints again
+    /// anyway; a discrete update (a click, one hover move) needs this one extra paint or it
+    /// is drawn and never shown until the next event — the "one event behind" ghost.
+    /// Submitting again here would make the frame it drew the *next* one's business, so the
+    /// flag would never clear.
+    present_poll: bool,
+    /// The scene has changed since the last draw, so the image in `frame` is stale.
+    ///
+    /// The image path draws only when this is set: a paint the readback asked for must
+    /// not draw again, or it would start another copy and spin. It is therefore set where
+    /// the **change happens** ([`input_changed`](Self::input_changed)) rather than inferred
+    /// from the paint — the two coalesce. A click that arrived while a readback was in
+    /// flight became a single paint that was both a poll and an invalidation; the poll's
+    /// rule skipped the draw, and the landed image then ended the loop, so the click's
+    /// frame only appeared on the *next* pointer event (one event behind).
+    scene_dirty: bool,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
     presenter: Option<Rc<RefCell<Box<dyn Presenter>>>>,
     /// Frames spent waiting for the presenter's first paint. Bounds the startup loop
     /// when the canvas is never painted (a hidden or zero-sized element).
     presenter_frames: u8,
+    /// The last `refresh_with` gave the presenter a frame. When the presenter defers
+    /// presentation (the dma-buf ring), `render` has to ask for the paint that shows it.
+    presenter_drew: bool,
     /// The element's window-space bounds, captured at prepaint. gpui reports pointer
     /// positions relative to the **window**, so this is subtracted to make them
     /// viewport-local (see [`to_local`](Self::to_local)).
@@ -935,6 +977,7 @@ impl MarkerLayer {
                 depth: Default::default(),
                 pickable: false,
                 ribbon: false,
+                sprite: false,
                 program: None,
             },
         });
@@ -956,6 +999,54 @@ fn sync_layer(layer: &mut GridLayer, camera: &Camera, spec: Option<LayerSpec<'_>
     }
 }
 
+/// One level's built geometry: exactly what a packet hands the renderer.
+///
+/// [`GridLayer::emit`] runs on **every paint**, and building a packet there copies the
+/// level's vertices — tens of thousands for a dot field or a wide lattice — which is
+/// megabytes of copy per frame while an orbiting camera repaints. That copy was the grid's
+/// share of the cost of a drag. The renderer keys its uploads on `(mesh, generation)` and
+/// skips a generation it already holds, so handing it the same `Arc` again costs a
+/// refcount and nothing else.
+struct Level {
+    geometry: Arc<Geometry>,
+    topology: Topology,
+    depth: DepthState,
+}
+
+impl Level {
+    /// `hairline` is the topology of the **no-index** form (lines for a hairline lattice).
+    /// A level that carries indices is a stroke's or a sprite's triangles and takes
+    /// `triangles`' depth state — [`BLENDED_DEPTH`] for the ground (its fades live in the
+    /// vertex alpha), the coplanar ghost pass for an occluded stem.
+    fn new(
+        vertices: &[Vertex],
+        indices: &[u32],
+        hairline: Topology,
+        triangles: DepthState,
+    ) -> Option<Self> {
+        if vertices.is_empty() {
+            return None;
+        }
+        let (topology, indices, depth) = if indices.is_empty() {
+            (
+                hairline,
+                (0..vertices.len() as u32).collect(),
+                DepthState::default(),
+            )
+        } else {
+            (Topology::Triangles, indices.to_vec(), triangles)
+        };
+        Some(Self {
+            geometry: Arc::new(Geometry {
+                vertices: vertices.to_vec(),
+                indices,
+            }),
+            topology,
+            depth,
+        })
+    }
+}
+
 /// One grid's cached geometry: dots, the minor lattice, the major lines and the triad at
 /// its origin.
 struct GridLayer {
@@ -970,15 +1061,11 @@ struct GridLayer {
     triad_ghost_generation: Generation,
     ground_key: Option<u64>,
     triad_key: Option<u64>,
-    dots: Vec<Vertex>,
-    dot_indices: Vec<u32>,
-    minor_lines: Vec<Vertex>,
-    minor_indices: Vec<u32>,
-    lines: Vec<Vertex>,
-    line_indices: Vec<u32>,
-    triad: Vec<Vertex>,
-    triad_ghost: Vec<Vertex>,
-    triad_indices: Vec<u32>,
+    dots: Option<Level>,
+    minor_lines: Option<Level>,
+    lines: Option<Level>,
+    triad: Option<Level>,
+    triad_ghost: Option<Level>,
     /// The coplanar lift for a face grid; `0` for the world ground.
     depth_bias: f32,
     /// The dots and major lines (`App_ToggleGrid`).
@@ -1006,15 +1093,11 @@ impl GridLayer {
             triad_ghost_generation: Generation(0),
             ground_key: None,
             triad_key: None,
-            dots: Vec::new(),
-            dot_indices: Vec::new(),
-            minor_lines: Vec::new(),
-            minor_indices: Vec::new(),
-            lines: Vec::new(),
-            line_indices: Vec::new(),
-            triad: Vec::new(),
-            triad_ghost: Vec::new(),
-            triad_indices: Vec::new(),
+            dots: None,
+            minor_lines: None,
+            lines: None,
+            triad: None,
+            triad_ghost: None,
             depth_bias,
             show_ground: false,
             show_triad: false,
@@ -1025,12 +1108,27 @@ impl GridLayer {
         let key = grid::ground_key(spec, style);
         if self.ground_key != Some(key) {
             let ground = grid::ground(spec, style);
-            self.dots = ground.dots;
-            self.dot_indices = ground.dot_indices;
-            self.minor_lines = ground.minor_lines;
-            self.minor_indices = ground.minor_indices;
-            self.lines = ground.lines;
-            self.line_indices = ground.line_indices;
+            // A dot field is one screen-space sprite per intersection (triangles, expanded
+            // by the renderer); a lattice or a wide stroke is lines or triangles, and the
+            // geometry itself says which.
+            self.dots = Level::new(
+                &ground.dots,
+                &ground.dot_indices,
+                Topology::Triangles,
+                BLENDED_DEPTH,
+            );
+            self.minor_lines = Level::new(
+                &ground.minor_lines,
+                &ground.minor_indices,
+                Topology::Lines,
+                BLENDED_DEPTH,
+            );
+            self.lines = Level::new(
+                &ground.lines,
+                &ground.line_indices,
+                Topology::Lines,
+                BLENDED_DEPTH,
+            );
             self.ground_generation = Generation(self.ground_generation.0 + 1);
             self.ground_key = Some(key);
         }
@@ -1049,9 +1147,18 @@ impl GridLayer {
                 }
                 _ => axis::triad(&spec.workplane, camera, axis),
             };
-            self.triad_ghost = axis::ghost(&vertices, axis.ghost_alpha);
-            self.triad = vertices;
-            self.triad_indices = indices;
+            self.triad_ghost = Level::new(
+                &axis::ghost(&vertices, axis.ghost_alpha),
+                &indices,
+                Topology::Triangles,
+                GHOST_DEPTH,
+            );
+            self.triad = Level::new(
+                &vertices,
+                &indices,
+                Topology::Triangles,
+                DepthState::default(),
+            );
             self.triad_generation = Generation(self.triad_generation.0 + 1);
             self.triad_ghost_generation = Generation(self.triad_ghost_generation.0 + 1);
             self.triad_key = Some(key);
@@ -1060,96 +1167,75 @@ impl GridLayer {
 
     fn emit(&self, queue: &mut RenderQueue) {
         if self.show_ground {
-            self.emit_level(queue, self.dots_mesh, &self.dots, &self.dot_indices, Topology::Points);
-            self.emit_level(queue, self.minor_mesh, &self.minor_lines, &self.minor_indices, Topology::Lines);
-            self.emit_level(queue, self.lines_mesh, &self.lines, &self.line_indices, Topology::Lines);
+            // The dots are screen-space sprites; the two line levels are geometry.
+            if let Some(level) = &self.dots {
+                queue.packets.push(self.packet(
+                    self.dots_mesh,
+                    self.ground_generation,
+                    level,
+                    true,
+                ));
+            }
+            for (mesh, level) in [
+                (self.minor_mesh, &self.minor_lines),
+                (self.lines_mesh, &self.lines),
+            ] {
+                if let Some(level) = level {
+                    queue.packets.push(self.packet(
+                        mesh,
+                        self.ground_generation,
+                        level,
+                        false,
+                    ));
+                }
+            }
         }
-        if self.show_triad && !self.triad.is_empty() {
-            queue.packets.push(self.packet(
-                self.triad_mesh,
-                self.triad_generation,
-                Topology::Triangles,
-                self.triad.clone(),
-                self.triad_indices.clone(),
-                DepthState::default(),
-            ));
-            if !self.triad_ghost.is_empty() {
+        if self.show_triad {
+            if let Some(triad) = &self.triad {
+                queue.packets.push(self.packet(
+                    self.triad_mesh,
+                    self.triad_generation,
+                    triad,
+                    false,
+                ));
                 // The stems behind a solid read at the occluded-axis ink instead of
                 // disappearing or floating over the front face.
-                queue.packets.push(self.packet(
-                    self.triad_ghost_mesh,
-                    self.triad_ghost_generation,
-                    Topology::Triangles,
-                    self.triad_ghost.clone(),
-                    self.triad_indices.clone(),
-                    GHOST_DEPTH,
-                ));
+                if let Some(ghost) = &self.triad_ghost {
+                    queue.packets.push(self.packet(
+                        self.triad_ghost_mesh,
+                        self.triad_ghost_generation,
+                        ghost,
+                        false,
+                    ));
+                }
             }
         }
     }
 
-    /// One grid level: its hairline form (`hairline`: a point per dot, two vertices per
-    /// line segment), or the triangles of a wide stroke (the
-    /// [geometry](grid::GridGeometry) says which by whether it carries indices).
-    ///
-    /// A wide stroke goes through the *lit* stage, not the ribbon one: the ribbon stage
-    /// feathers its last pixel on each side, which on a 2–4 px grid line eats half the
-    /// requested width. The quad is the width the user asked for, and the 4× MSAA target
-    /// antialiases its edges instead.
-    ///
-    /// A wide stroke also asks for [`BLENDED_DEPTH`], which selects the renderer's
-    /// alpha-blended scene-triangle variant. The opaque base pipeline is
-    /// `BlendState::REPLACE`, so a triangle drawn through it ignores its per-vertex alpha
-    /// — and every fade the grid has (the radial patch fade, the edge-on `grazing`
-    /// factor and the user's `Grid.opacity`) lives in that alpha. Hairlines and dots
-    /// already blend; without this they were the only levels that dimmed.
-    fn emit_level(
-        &self,
-        queue: &mut RenderQueue,
-        mesh: MeshId,
-        vertices: &[Vertex],
-        indices: &[u32],
-        hairline: Topology,
-    ) {
-        if vertices.is_empty() {
-            return;
-        }
-        let (topology, indices, depth) = if indices.is_empty() {
-            (
-                hairline,
-                (0..vertices.len() as u32).collect(),
-                DepthState::default(),
-            )
-        } else {
-            (Topology::Triangles, indices.to_vec(), BLENDED_DEPTH)
-        };
-        queue.packets.push(self.packet(
-            mesh,
-            self.ground_generation,
-            topology,
-            vertices.to_vec(),
-            indices,
-            depth,
-        ));
-    }
-
     /// The grid is deliberately **not pickable**: it is emitted into its own queue that
     /// no pick path sees, and it carries the untagged id besides.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// The packet reuses the level's `Arc`: `emit` runs on every paint, and the renderer
+    /// skips a `(mesh, generation)` it already holds, so an unchanged level costs a
+    /// refcount here instead of a copy of its vertices.
+    ///
+    /// A wide stroke binds [`BLENDED_DEPTH`] (see [`Level::new`]) because the opaque base
+    /// pipeline is `BlendState::REPLACE` and every fade the grid has — the radial patch
+    /// fade, the edge-on `grazing` factor and the user's `Grid.opacity` — lives in the
+    /// vertex alpha. A dot field asks for the **sprite** stage (`state.sprite`): its mark
+    /// is expanded to a fixed pixel size instead of being sized in the world.
     fn packet(
         &self,
         mesh_id: MeshId,
         generation: Generation,
-        topology: Topology,
-        vertices: Vec<Vertex>,
-        indices: Vec<u32>,
-        depth: DepthState,
+        level: &Level,
+        sprite: bool,
     ) -> DrawPacket {
         DrawPacket {
             mesh_id,
             generation,
-            topology,
-            geometry: Some(Arc::new(Geometry { vertices, indices })),
+            topology: level.topology,
+            geometry: Some(Arc::clone(&level.geometry)),
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
@@ -1157,11 +1243,12 @@ impl GridLayer {
                 depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
-                depth,
+                depth: level.depth,
                 pickable: false,
-                // The grid never uses the ribbon stage: its strokes are geometry, and the
-                // MSAA target antialiases their edges without a per-pixel feather.
+                // The grid's lines never use the ribbon stage: their strokes are geometry,
+                // and the MSAA target antialiases their edges without a per-pixel feather.
                 ribbon: false,
+                sprite,
                 program: None,
             },
         }
@@ -1182,7 +1269,7 @@ fn with_stroke(
 ) -> GridStyle {
     style.minor_style = policy.minor_style;
     style.major_width = stroke_width(camera, plane, policy.major_width);
-    style.minor_width = stroke_width(camera, plane, policy.minor_width);
+    style.minor_width = minor_width(camera, plane, policy);
     style
 }
 
@@ -1219,6 +1306,24 @@ fn stroke_width(camera: &Camera, plane: &Workplane, pixels: f64) -> f64 {
         return 0.0;
     }
     scale_for(camera, plane.origin, pixels)
+}
+
+/// The minor level's width in the plane's units: a stroke for the lattice, and **nothing**
+/// for the dot field.
+///
+/// A dot is a screen-space sprite: four vertices at the intersection that the renderer
+/// expands to a fixed number of device pixels. Sizing it in world units instead makes it a
+/// quad whose size follows the camera — near dots bigger than far ones, exactly the "the
+/// grid is 3D geometry" look — and, worse, it puts a camera-dependent width into
+/// [`GridStyle`], whose key ([`grid::ground_key`]) then changes on **every** camera move:
+/// the whole lattice is rebuilt on every orbiting frame, which is the difference between a
+/// smooth orbit and a stuttering one. The Coin backend's dot is a screen-space disc, so the
+/// two backends draw the same mark.
+fn minor_width(camera: &Camera, plane: &Workplane, policy: GridPolicy) -> f64 {
+    match policy.minor_style {
+        grid::MinorStyle::Dots => 0.0,
+        grid::MinorStyle::Lines => stroke_width(camera, plane, policy.minor_width),
+    }
 }
 
 /// The spec and style of the workplane a pointer is hovering: the same steps and the
@@ -1498,6 +1603,13 @@ struct FaceHover {
 /// flickers while crossing an edge; the face highlight stays instant.
 const FACE_DWELL: Duration = Duration::from_millis(120);
 
+/// The provider feature whose overlay is replayed on a candidate plane.
+///
+/// The role comes from the registry (`FerroCADGui.registerProvider("grid", …)`), not
+/// from a mod naming itself, so every backend of the feature — the native one, the
+/// Coin shader, a page — is previewed by the same rule.
+const GRID_OVERLAY_ROLE: &str = "grid";
+
 /// The snap a tool is currently working from, for the aurora, the rays and the pill.
 struct SnapFeedback {
     snap: ferrocad_stage::Snap,
@@ -1625,6 +1737,7 @@ fn feedback_packet(
             depth: Default::default(),
             pickable: false,
             ribbon: false,
+            sprite: false,
             program: None,
         },
     }
@@ -1742,6 +1855,8 @@ impl<V: InventorView> InventorViewport<V> {
             grid_queue: RenderQueue::default(),
             grid_overlay: false,
             program_queue,
+            grid_program_queue: RenderQueue::default(),
+            grid_main_queue: RenderQueue::default(),
             shadow_footprints: None,
             shader_error,
             overlays: Vec::new(),
@@ -1758,9 +1873,11 @@ impl<V: InventorView> InventorViewport<V> {
             protractor_meshes: ProtractorMeshes::new(),
             frame: None,
             readback_poll: false,
-            readback_dirty: true,
+            present_poll: false,
+            scene_dirty: true,
             presenter: None,
             presenter_frames: 0,
+            presenter_drew: false,
             last_bounds: None,
         };
         viewport.sync_directive_cubes();
@@ -1787,6 +1904,14 @@ impl<V: InventorView> InventorViewport<V> {
         self.presenter
             .as_ref()
             .map(|presenter| presenter.borrow().status())
+    }
+
+    /// Whether a frame this paint handed the presenter needs a paint of its own to reach
+    /// the window (see [`Presenter::defers_presentation`]).
+    fn presenter_defers_presentation(&self) -> bool {
+        self.presenter
+            .as_ref()
+            .is_some_and(|presenter| presenter.borrow().defers_presentation())
     }
 
     /// The presenter's technical reason for using the image path, if it fell back.
@@ -2502,6 +2627,12 @@ impl<V: InventorView> InventorViewport<V> {
     /// drag, a gizmo drag, and finally an active workplane. `Enter` finishes an active
     /// tool (without committing anything).
     pub fn handle_key(&mut self, event: &KeyDownEvent) -> bool {
+        let changed = self.key_pressed(event);
+        self.input_changed(changed)
+    }
+
+    /// The body of [`handle_key`](Self::handle_key).
+    fn key_pressed(&mut self, event: &KeyDownEvent) -> bool {
         match event.keystroke.key.as_str() {
             "escape" => {
                 if self.cancel_tool() {
@@ -2863,13 +2994,33 @@ impl<V: InventorView> InventorViewport<V> {
     /// path: an overlay's program packets land in [`program_queue`](Self::program_queue)
     /// exactly like a scene program. The base scene, the stage and the native grid
     /// are untouched.
+    ///
+    /// A scene registered without a provider feature has no role: it draws, and it is
+    /// never replayed on a candidate plane. See
+    /// [`set_overlays_tagged`](Self::set_overlays_tagged).
     pub fn set_overlays(&mut self, overlays: Vec<Scene>) {
+        self.set_overlays_tagged(
+            overlays
+                .into_iter()
+                .map(|scene| OverlayScene { role: None, scene })
+                .collect(),
+        );
+    }
+
+    /// [`set_overlays`](Self::set_overlays) carrying each scene's provider feature.
+    ///
+    /// The grid overlay is the scene whose role is [`GRID_OVERLAY_ROLE`]: its program
+    /// packets are also compiled into [`grid_main_queue`](Self::grid_main_queue) (the
+    /// bound plane) and [`grid_program_queue`](Self::grid_program_queue) (the hover
+    /// bloom), and are kept out of [`program_queue`](Self::program_queue) so the grid is
+    /// drawn once, on whichever plane is current.
+    pub fn set_overlays_tagged(&mut self, overlays: Vec<OverlayScene>) {
         self.overlays = overlays;
         self.recompile();
     }
 
-    /// The overlay scenes currently merged into the draw.
-    pub fn overlays(&self) -> &[Scene] {
+    /// The overlay scenes currently merged into the draw, with their roles.
+    pub fn overlays(&self) -> &[OverlayScene] {
         &self.overlays
     }
 
@@ -3436,6 +3587,12 @@ impl<V: InventorView> InventorViewport<V> {
         logical: [f32; 2],
         modifiers: GizmoModifiers,
     ) -> bool {
+        let changed = self.pointer_moved(logical, modifiers);
+        self.input_changed(changed)
+    }
+
+    /// The body of [`handle_pointer_with_modifiers`](Self::handle_pointer_with_modifiers).
+    fn pointer_moved(&mut self, logical: [f32; 2], modifiers: GizmoModifiers) -> bool {
         note_pointer_move();
         let device = self.camera.viewport.to_device(logical);
         // Kept even during a drag or over the chrome: the origin node's proximity bloom
@@ -3643,7 +3800,17 @@ impl<V: InventorView> InventorViewport<V> {
         } else {
             hit.as_ref().map(Self::anchor_of)
         };
-        changed |= self.dispatch_tool(PointerKind::Move, device, None, hit.as_ref());
+        // A **placement** needs a hit for *this* pixel. The presenter's pick answers one
+        // submission late, so until it lands `hover_pick` reports the previous pixel's hit;
+        // `dispatch_tool` takes its plane from it but never its point (see there).
+        let hit_is_current = !self.hover_pick_is_stale(device);
+        changed |= self.dispatch_tool(
+            PointerKind::Move,
+            device,
+            None,
+            hit.as_ref(),
+            hit_is_current,
+        );
         changed | self.dispatch_hover(device, hit.as_ref())
     }
 
@@ -3683,6 +3850,20 @@ impl<V: InventorView> InventorViewport<V> {
     /// selection reports it: a double click can upgrade the pick to the whole body at
     /// the host without the viewport guessing timing or distance.
     pub fn handle_button_with_modifiers_and_click_count(
+        &mut self,
+        logical: [f32; 2],
+        button: u8,
+        down: bool,
+        modifiers: GizmoModifiers,
+        click_count: usize,
+    ) -> bool {
+        let changed = self.button_changed(logical, button, down, modifiers, click_count);
+        self.input_changed(changed)
+    }
+
+    /// The body of
+    /// [`handle_button_with_modifiers_and_click_count`](Self::handle_button_with_modifiers_and_click_count).
+    fn button_changed(
         &mut self,
         logical: [f32; 2],
         button: u8,
@@ -3758,6 +3939,7 @@ impl<V: InventorView> InventorViewport<V> {
                 device,
                 Some(StageButton::Left),
                 hit.as_ref(),
+                true,
             );
             delivered |= self.dispatch(
                 &Event::MouseButton {
@@ -3956,6 +4138,18 @@ impl<V: InventorView> InventorViewport<V> {
         // tool claims as its own gesture (dragging a placed vertex) is delivered now and
         // starts no orbit. The middle button always navigates.
         let hit = self.pick(device);
+        // A button event resolves its **own** pick — it cannot be satisfied by a deferred
+        // one (`pick` waits on the device) — so what the pointer is over is known here, for
+        // this pixel. The hover report is what the host's Inspect highlight is drawn from,
+        // and leaving it on the deferred hover's answer meant a click landed with the
+        // highlight still missing until the next move.
+        let previous_target = self.hover_report.target.clone();
+        self.hover_report.target = self.scoped_reference_near(hit.as_ref(), device);
+        self.hover_anchor = hit.as_ref().map(Self::anchor_of);
+        self.hover = hit.map(|hit| hit.id);
+        self.hovered_part = hit.map(|hit| hit.part);
+        self.refresh_hover_face();
+        let mut changed = self.hover_report.target != previous_target;
         let event = PointerEvent {
             kind: PointerKind::Down,
             position: device,
@@ -3973,7 +4167,9 @@ impl<V: InventorView> InventorViewport<V> {
         }
         if down && button == 1 && !tool_takes_press && self.tool.is_some() {
             self.pending_press = Some(PendingPress);
-            return false;
+            // Nothing is placed yet, but the press did resolve what the pointer is over,
+            // so a report that changed must still repaint it.
+            return changed;
         }
 
         let kind = if down {
@@ -3986,7 +4182,9 @@ impl<V: InventorView> InventorViewport<V> {
         if down && button == 1 {
             self.bind_face_for_tool(hit.as_ref());
         }
-        let mut changed = self.dispatch_tool(kind, device, stage_button(button), hit.as_ref());
+        // `pick` resolved this pixel's hit (it waits for it), so the tool may use its point.
+        changed |=
+            self.dispatch_tool(kind, device, stage_button(button), hit.as_ref(), true);
         changed |= delivered;
         let event = Event::MouseButton {
             position: device,
@@ -4046,7 +4244,7 @@ impl<V: InventorView> InventorViewport<V> {
         let tool_state = self.take_tool_state();
         self.flush_transform_preview(cx);
         if changed {
-            cx.notify();
+            self.changed(cx);
         }
         if let Some(status) = tool_state {
             cx.emit(ViewportEvent::ToolState(status));
@@ -4129,6 +4327,12 @@ impl<V: InventorView> InventorViewport<V> {
     /// zoom keeps the view direction: a perspective camera moves its eye, an
     /// orthographic one scales its extent.
     pub fn handle_scroll(&mut self, lines: f32) -> bool {
+        let changed = self.zoomed(lines);
+        self.input_changed(changed)
+    }
+
+    /// The body of [`handle_scroll`](Self::handle_scroll).
+    fn zoomed(&mut self, lines: f32) -> bool {
         if !lines.is_finite() || lines == 0.0 {
             return false;
         }
@@ -4269,6 +4473,7 @@ impl<V: InventorView> InventorViewport<V> {
         device: [i32; 2],
         button: Option<StageButton>,
         hit: Option<&Hit>,
+        hit_is_current: bool,
     ) -> bool {
         if self.tool.is_none() {
             return false;
@@ -4279,6 +4484,16 @@ impl<V: InventorView> InventorViewport<V> {
         // face means — so a pick there names the plane, not the point: the snap unprojects
         // onto the face's grid instead of landing on the raw surface point.
         let (context, grid_wins) = self.placement_context(hit);
+        // A **stale** hit names a plane (the pointer is still on that surface, as far as
+        // the deferred pick knows) but its `point` is the previous pixel's. Snapping to it
+        // put the ghost where the pointer used to be, so it stayed put and jumped on the
+        // next event. Only a hit for *this* pixel may name the point; the plane is still
+        // the best answer there is until the pick lands.
+        let point_hit = if grid_wins || !hit_is_current {
+            None
+        } else {
+            hit
+        };
         let projection = Some(ViewProjection::from_camera(&self.camera));
         let pointer = |hit: Option<&Hit>| PointerEvent {
             kind,
@@ -4290,12 +4505,7 @@ impl<V: InventorView> InventorViewport<V> {
             projection,
         };
         let candidates = self.snap_candidates(hit);
-        let snap = snap_to_geometry_with(
-            &pointer(if grid_wins { None } else { hit }),
-            &self.camera,
-            Some(&context),
-            &candidates,
-        );
+        let snap = snap_to_geometry_with(&pointer(point_hit), &self.camera, Some(&context), &candidates);
         // The aurora is a **snap** cue: a plane point is where the tool simply places, not
         // something the pointer was pulled to, so it lights nothing and the status line
         // stays quiet.
@@ -4607,6 +4817,20 @@ impl<V: InventorView> InventorViewport<V> {
                 manipulator.readout_anchor(&self.camera)?,
             ))
         })
+    }
+
+    /// The armed tool's own anchor in window-logical pixels, for the finish pair.
+    ///
+    /// A creation tool's session ends with the same `✗`/`✓` pair the Move form and a
+    /// released manipulator use, and it belongs **beside the work**: this projects the
+    /// tool's [`Tool::anchor`] — the corner a box grows
+    /// from, the centre a circle grows around, the frontier of a polyline — so the control
+    /// never sits under the pointer, which is where the next click lands. `None` when no
+    /// tool is armed, the tool has no anchor, or the point is behind the camera; the host
+    /// then falls back to the canvas.
+    pub fn tool_finish_anchor(&self) -> Option<Point<Pixels>> {
+        let world = self.tool.as_ref()?.anchor()?;
+        Some(self.window_point(project_device(&self.camera, world)?))
     }
 
     /// The topmost manipulator's dimension-pill anchor in window-logical pixels.
@@ -5280,6 +5504,12 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a pointer leave.
     pub fn handle_pointer_leave(&mut self) -> bool {
+        let changed = self.pointer_left();
+        self.input_changed(changed)
+    }
+
+    /// The body of [`handle_pointer_leave`](Self::handle_pointer_leave).
+    fn pointer_left(&mut self) -> bool {
         let had_bloom = self.origin_bloomed();
         self.hover = None;
         self.hovered_part = None;
@@ -5369,6 +5599,15 @@ impl<V: InventorView> InventorViewport<V> {
             .is_some_and(|presenter| presenter.borrow().supports_pick())
     }
 
+    /// Whether the hover pick in hand belongs to a **different** pixel.
+    ///
+    /// The presenter's pick is deferred: `hover_pick` reports the previous answer while a
+    /// new one is in flight, which is right for a tint and wrong for anything that turns the
+    /// hit into a world point.
+    fn hover_pick_is_stale(&self, device: [i32; 2]) -> bool {
+        self.presenter_defers_pick() && self.resolved_hover(device).is_none()
+    }
+
     /// Whether the presenter still owes the answer to a hover pick it already took.
     fn hover_pick_outstanding(&self) -> bool {
         self.presenter
@@ -5443,6 +5682,10 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     fn recompile(&mut self) {
+        // A rebuilt scene is a stale image: the paint that recompiled it has to draw (see
+        // `scene_dirty`). A host sets state and notifies from one update, and that paint can
+        // coalesce with a readback poll, whose rule is to skip the draw.
+        self.scene_dirty = true;
         // Keep the no-overlay path allocation-free: it is the common case and the
         // base scene can be large.
         let (queue, directives, shader_error, stage_start) = if self.overlays.is_empty() {
@@ -5467,10 +5710,27 @@ impl<V: InventorView> InventorViewport<V> {
             .collect();
         self.stage_rest = None;
         self.stage_bounds = self.measure_stage_bounds();
-        apply_program_shadows(&mut program_queue, &self.effective_shadow_footprints());
+        let footprints = self.effective_shadow_footprints();
+        apply_program_shadows(&mut program_queue, &footprints);
         apply_program_bounds(&mut program_queue, self.stage_bounds);
         self.queue = queue;
         self.program_queue = program_queue;
+        // The authored grid draws on its **own** pass, so it is one draw on whichever plane
+        // is current: the bound one, or the face the pointer is previewing. Two copies are
+        // kept because the candidate must not carry shadows measured in the active plane's
+        // frame; with the native ground in charge both stay empty.
+        if self.grid_overlay {
+            // Compiled **once**, then cloned: the compiled queue is a handful of packets over
+            // shared `Arc`s, and a second `compile_diagnostic` per recompile is wasted work.
+            let mut bound = self.compile_grid_overlay();
+            self.grid_program_queue = bound.clone();
+            apply_program_shadows(&mut bound, &footprints);
+            apply_program_bounds(&mut bound, self.stage_bounds);
+            self.grid_main_queue = bound;
+        } else {
+            self.grid_main_queue = RenderQueue::default();
+            self.grid_program_queue = RenderQueue::default();
+        }
         self.directives = directives;
         self.shader_error = shader_error;
         self.stage_dirty = false;
@@ -5488,13 +5748,48 @@ impl<V: InventorView> InventorViewport<V> {
     fn merged_scene(&self) -> Scene {
         let mut children = Vec::with_capacity(self.overlays.len() + 1);
         children.push(self.scene.root.clone());
-        children.extend(self.overlays.iter().map(|overlay| overlay.root.clone()));
+        children.extend(
+            self.overlays
+                .iter()
+                // The grid provider owns a program and its placeholder, nothing else, and it
+                // is drawn from `grid_main_queue` on the plane that is current. Leaving it in
+                // the merged scene would put a second grid on the **active** plane while the
+                // hover bloom previews another one.
+                .filter(|overlay| overlay.role.as_deref() != Some(GRID_OVERLAY_ROLE))
+                .map(|overlay| overlay.scene.root.clone()),
+        );
         Scene {
             root: Node {
                 kind: NodeKind::Separator,
                 children,
             },
         }
+    }
+
+    /// The grid provider's program packets, compiled on their own.
+    ///
+    /// The hover bloom replays **these** on the candidate plane, through the same
+    /// shader and the same ABI the active plane uses, so a click does not change the
+    /// renderer that draws the lattice. Compiling them apart from the merged scene
+    /// buys two things a filtered copy of [`program_queue`](Self::program_queue) could
+    /// not: a non-grid overlay (a HUD, a gizmo) never lands on a plane its author did
+    /// not ask for, and the preview carries **no shadow block** — the stage's
+    /// footprints are measured in the *active* plane's `(u, v)` frame, which is the
+    /// wrong frame for a candidate.
+    fn compile_grid_overlay(&self) -> RenderQueue {
+        let Some(grid) = self
+            .overlays
+            .iter()
+            .find(|overlay| overlay.role.as_deref() == Some(GRID_OVERLAY_ROLE))
+        else {
+            return RenderQueue::default();
+        };
+        let scene = Scene {
+            root: grid.scene.root.clone(),
+        };
+        let (queue, _directives, _error) =
+            compile_diagnostic(&scene, &self.camera.viewport, None);
+        split_programs(queue).1
     }
 
     /// Rebuild the `Directive::NaviCube` overlays when the set of requests changed.
@@ -5748,21 +6043,70 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
+    /// The candidate face a click would bind, when the hover preview is live.
+    ///
+    /// One predicate for both halves of the preview: the native hover layer
+    /// ([`sync_grid`](Self::sync_grid)) and the provider replay
+    /// ([`preview_workplane`](Self::preview_workplane)). The preview is the Tier 1
+    /// auto-workplane hint, so it needs an open creation tool, the default plane still
+    /// active (once a tool binds a face the plane is no longer the default), a face the
+    /// pointer has rested on past [`FACE_DWELL`], and a plane that is not already active.
+    /// While it is up it is drawn **in addition** to the plane in force: a hint may not
+    /// take a grid away.
+    fn hover_candidate(&self) -> Option<FaceFrame> {
+        self.hover_face
+            .as_ref()
+            .filter(|_| {
+                self.grid_enabled && self.tool.is_some() && self.active_workplane.is_default()
+            })
+            .filter(|face| face.since.elapsed() >= FACE_DWELL)
+            .filter(|face| self.active_workplane.plane.kind != face.frame.plane.kind)
+            .map(|face| face.frame.clone())
+    }
+
+    /// The candidate plane the hover preview is drawing, as the program grid's frame.
+    ///
+    /// It derives the frame through the same [`ActiveWorkplane::view_workplane`] the
+    /// click will use, so the steps, patch radius, ink and stroke are the ones the
+    /// provider draws once the face is bound. A second `ViewSpec`, encoded **after** the
+    /// pass on the plane in force, replays [`grid_program_queue`](Self::grid_program_queue)
+    /// with this frame, so the preview and the bound plane are the same renderer as well as
+    /// the same lattice — and the current plane keeps its grid while the hint is up.
+    ///
+    /// Scheduled by [`refresh_with`](Self::refresh_with) at draw time: a provider never
+    /// names a plane, so the hover frame stays private to the viewport.
+    fn preview_workplane(&self) -> Option<WorkplaneFrame> {
+        let frame = self.hover_candidate()?;
+        Some(ActiveWorkplane::of(&frame).view_workplane(
+            &self.camera,
+            self.grid_policy(),
+            self.grid_radius,
+        ))
+    }
+
     /// Rebuild the reference geometry for the current camera: the effective steps
     /// (screen-space culling), the radius, and the screen-facing triads.
     ///
     /// Three layers can contribute: the world layer, the active workplane and a hovered
     /// face (each when present). `App_ToggleGrid` owns the ground fields, the axis-cross
     /// flag owns the triads and the origin node, so they can be shown independently.
-    /// There is **one grid**, moved: while a non-default plane is active the world ground
+    /// There is **one locked grid**: while a non-default plane is active the world ground
     /// is not drawn at all (the active layer replaces it), and only the world **triad**
-    /// recedes to [`grid::WORLD_TRIAD_DIM`] so the global origin stays locatable. A hover
-    /// preview (the default plane still active) keeps the ground and dims it instead.
+    /// recedes to [`grid::WORLD_TRIAD_DIM`] so the global origin stays locatable.
+    ///
+    /// A **hover** is not a lock. The preview patch is drawn *in addition* to the active
+    /// grid, which keeps its ink: hovering a face is a hint about what a click would bind,
+    /// and a hint must not take the grid the user is already working on off the screen —
+    /// the plane comes back the moment the pointer moves, so displacing it flickered.
+    /// Hovering never previews while a plane is bound ([`hover_candidate`](Self::hover_candidate)),
+    /// so there is at most one preview and it never competes with a locked plane.
     /// When the shader
     /// grid overlay is on, the **world ground** is hidden (two coplanar line grids
-    /// z-fight); the triad, the workplane's own grid and the origin node stay. The
-    /// packets go to their own queue ([`grid_queue`](Self::grid_queue)) so nothing here
-    /// is ever picked.
+    /// z-fight); the triad, the workplane's own grid and the origin node stay, and the
+    /// hover preview's ground is drawn by the provider on the candidate plane
+    /// ([`preview_workplane`](Self::preview_workplane)), leaving only its triad native.
+    /// The packets go to their own queue ([`grid_queue`](Self::grid_queue)) so nothing
+    /// here is ever picked.
     ///
     /// The native cross is `axis.enabled && !axis.overlay`: an authored (Coin)
     /// backend claims the axis with `view.axis.overlay`, which hides the native triad,
@@ -5779,18 +6123,12 @@ impl<V: InventorView> InventorViewport<V> {
         // The default world `XY` plane is drawn by the world layer; only a non-default
         // plane gets a layer of its own (and hides the coplanar world ground).
         let local = !active.is_default();
-        // Do not preview the face that is already active, and do not bloom at all unless a
+        // Do not preview the face that is already active, and do not preview at all unless a
         // click could act on it: the preview is the Tier 1 auto-workplane hint, so it needs
         // an open creation tool **and** the default plane (once a tool binds a face, the
-        // plane is no longer the default and the bloom stops). Idle hovering only reports
+        // plane is no longer the default and the preview stops). Idle hovering only reports
         // the face; it never adds a second grid.
-        let hover = self
-            .hover_face
-            .as_ref()
-            .filter(|_| grid_on && self.tool.is_some() && active.is_default())
-            .filter(|face| face.since.elapsed() >= FACE_DWELL)
-            .filter(|face| active.plane.kind != face.frame.plane.kind)
-            .map(|face| face.frame.clone());
+        let hover = self.hover_candidate();
 
         let world_plane = Workplane::world();
         let policy = self.grid_policy();
@@ -5803,9 +6141,10 @@ impl<V: InventorView> InventorViewport<V> {
             major,
             radius: world_radius,
         };
-        // A local frame is present when its grid is on, or (for the triad alone) when the
-        // axis cross is on with an active workplane.
-        let local_present = (grid_on && hover.is_some()) || local;
+        // The world style is the ground ink at its own strength. A **hover preview is not**
+        // **a lock**: it is a hint drawn on top, so it neither hides the world ground nor
+        // dims it — moving the pointer must not change the grid the user is working on. A
+        // bound plane does replace the ground (see `world` below).
         let mut world_style = with_stroke(
             level_style(None),
             &self.camera,
@@ -5823,12 +6162,17 @@ impl<V: InventorView> InventorViewport<V> {
             world_spec.major,
         );
         // The world triad uses the same style as a local one, receding when a local frame
-        // is present. The world **ground** is not drawn then (see `world` below): one
-        // grid, at the active plane, is the whole point of moving the plane.
+        // is in play — a bound plane, or the face a click would bind — so the plane's own
+        // cross is the only full-strength one (§8.1). The world **ground** is a different
+        // matter: it is not drawn at all under a bound plane (see `world` below), and a
+        // hover preview leaves it exactly as it is — the grid the user is placing on must
+        // not change because the pointer crossed a face.
         let mut world_axis = self.axis.clone();
-        if local_present {
-            world_style.dim = grid::WORLD_DIM;
+        if local || hover.is_some() {
             world_axis = world_axis.scaled_opacity(grid::WORLD_TRIAD_DIM);
+        }
+        if local {
+            world_style.dim = grid::WORLD_DIM;
         }
         let active_layer = (local && (grid_on || cross)).then(|| {
             let (spec, style) = active_grid(
@@ -5862,8 +6206,10 @@ impl<V: InventorView> InventorViewport<V> {
             spec: &world_spec,
             style: &world_style,
             axis: &world_axis,
-            // One grid: a non-default active plane *is* the grid, so the world ground
-            // steps aside entirely rather than stacking a second, dimmer grid under it.
+            // One **locked** grid: a non-default active plane *is* the grid, so the world
+            // ground steps aside for it rather than stacking a second, dimmer lattice
+            // under it. A hover preview is not a lock — it is drawn in addition, so the
+            // ambient ground stays exactly as it is while the pointer rests on a face.
             ground: grid_on && !self.grid_overlay && !local,
             triad: cross,
         };
@@ -5883,10 +6229,10 @@ impl<V: InventorView> InventorViewport<V> {
             spec,
             style,
             axis: &self.axis,
-            // The one exception: a hover bloom previews a plane that does not exist yet,
-            // and a bound overlay cannot draw a frame the view is not on, so the preview
-            // stays native even while the overlay owns the rest.
-            ground: true,
+            // The ground yields to the provider while the authored grid is on: the
+            // preview patch is drawn on the candidate plane by the same shader, in its own
+            // `ViewSpec`. Only the triad stays native here.
+            ground: !self.grid_overlay,
             triad: cross,
         });
 
@@ -6556,6 +6902,42 @@ impl<V: InventorView> InventorViewport<V> {
         })
     }
 
+    /// Whether the scene has changed since the last draw, so the image in hand is stale.
+    ///
+    /// The host does not need this to repaint (a `cx.notify()` does that); it is what the
+    /// image path uses to decide whether that paint may skip the draw.
+    pub fn scene_dirty(&self) -> bool {
+        self.scene_dirty
+    }
+
+    /// Record that an input entry point changed the scene.
+    ///
+    /// The image path draws only when [`scene_dirty`](Self::scene_dirty) is set, because a
+    /// paint the deferred readback asked for must not draw again (it would start another
+    /// copy and spin). Marking it **where the change happens** is what keeps a change from
+    /// being lost when it coalesces with such a poll: a click delivered while a readback was
+    /// in flight produced one paint that was both, the poll rule skipped the draw, and the
+    /// landed image ended the loop — so the click's frame appeared only on the next pointer
+    /// event, one event behind.
+    fn input_changed(&mut self, changed: bool) -> bool {
+        if changed {
+            self.scene_dirty = true;
+        }
+        changed
+    }
+
+    /// Report an input handler's change: mark the scene for a redraw, then repaint.
+    ///
+    /// A handler that only notifies is not enough on the image path — see
+    /// [`input_changed`](Self::input_changed).
+    fn changed(&mut self, cx: &mut Context<Self>)
+    where
+        V: 'static,
+    {
+        self.input_changed(true);
+        cx.notify();
+    }
+
     /// Step a running snap animation, applying the interpolated camera. Returns
     /// whether another frame is needed.
     fn step_snap(&mut self) -> bool {
@@ -6680,6 +7062,35 @@ impl<V: InventorView> InventorViewport<V> {
                 workplane: None,
             });
         }
+        if self.grid_overlay
+            && (!self.grid_main_queue.is_empty() || !self.grid_program_queue.is_empty())
+        {
+            // One **locked** grid on the plane in force, and — while the pointer rests on a
+            // face a click would bind — the preview patch on the candidate **in addition**.
+            // The preview is a hint, not a new state: the prompt to bind a face must not
+            // take the grid on the current plane away. Under the other overlay programs:
+            // the grid is the base layer they annotate.
+            if !self.grid_main_queue.is_empty() {
+                views.push(ViewSpec {
+                    queue: &self.grid_main_queue,
+                    camera: &self.camera,
+                    rect: None,
+                    overlay: false,
+                    workplane: Some(workplane),
+                });
+            }
+            if let Some(candidate) = self.preview_workplane() {
+                if !self.grid_program_queue.is_empty() {
+                    views.push(ViewSpec {
+                        queue: &self.grid_program_queue,
+                        camera: &self.camera,
+                        rect: None,
+                        overlay: false,
+                        workplane: Some(candidate),
+                    });
+                }
+            }
+        }
         if !self.program_queue.is_empty() {
             // Registered program overlays (G5): drawn after opaque geometry and the native
             // grid, in the same depth-tested pass. Their pipeline writes no depth by
@@ -6771,16 +7182,36 @@ impl<V: InventorView> InventorViewport<V> {
         // A ready presenter draws into its own GPU target. Until it is ready (and
         // whenever it is unavailable) keep the image path: those frames double as the
         // fallback while the host negotiates with the window's device.
-        let presented = match &self.presenter {
-            Some(presenter) => {
-                let mut presenter = presenter.borrow_mut();
-                presenter.status() == PresenterStatus::Ready && presenter.draw(&views)
+        //
+        // A **present-only** paint (`draw == false`, see `present_poll`) must not submit
+        // another frame: the one it is here to hand over is already on the target, and a
+        // new submission would make itself the next paint's business, so the loop would
+        // never end. Claiming the canvas without drawing is what lets `present` composite
+        // the frame the previous paint drew.
+        let mut presented = false;
+        let mut drew = false;
+        if let Some(presenter) = &self.presenter {
+            let mut presenter = presenter.borrow_mut();
+            if presenter.status() == PresenterStatus::Ready {
+                drew = draw && presenter.draw(&views);
+                presented = drew || !draw;
             }
-            None => false,
-        };
+        }
+        self.presenter_drew = drew;
+        if drew {
+            // The frame on the presenter's target was drawn from this state, so nothing
+            // is left for the next paint to redraw. (The image path clears the same flag
+            // in its own branch below.)
+            self.scene_dirty = false;
+        }
+        // A change the paint decision could not see — the compile half rebuilt the stage,
+        // the grid sync marked one — still asks for a draw once the target is free: the
+        // caller's decision was made before `refresh_with` ran. The pending check is the
+        // same one the caller made, re-taken because the readback may have landed since.
+        let draw = draw || self.scene_dirty;
         if draw && !presented && !self.view.image_pending() {
             if self.view.draw_frame(&views).is_ok() {
-                self.readback_dirty = false;
+                self.scene_dirty = false;
                 if !self.view.begin_image() {
                     if let Ok(image) = self.view.image() {
                         self.frame = Some(Arc::new(render_image(image)));
@@ -7000,25 +7431,34 @@ impl<V: InventorView + 'static> EventEmitter<ViewportEvent> for InventorViewport
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame_started = Instant::now();
+        // Whether some *other* mechanism already asked for the next frame. A paint that
+        // draws while one is pending is presented by that next frame; a paint nobody is
+        // going to follow up on needs one (see the presenter's present-only paint below).
+        let mut next_frame_pending = false;
         // Follow the element's physical size before drawing (the bounds were captured at
         // the previous prepaint). A change needs one more frame to take effect.
         if self.sync_size(window) {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         // MVP: render and read back during paint, on the UI thread. An inertial orbit or
         // a snap animation keeps requesting frames until it settles.
         if self.step_inertia() {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         if self.step_snap() {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         // A hovered face's grid blooms after a dwell; keep painting until it does.
         if self.face_dwell_pending() {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         // The snap aurora's flash decays over 120 ms.
         if self.feedback_flash_pending() {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         // A drag repaints once per pointer move, and a move is only a *request*: when the
@@ -7027,6 +7467,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         // jumps". Asking for the next frame while a drag is live makes the drag run at the
         // window's rate instead of at whatever rate notifies happen to land.
         if self.drag_active() {
+            next_frame_pending = true;
             window.request_animation_frame();
         }
         // The presenter negotiates with the window's device on its first paint; ask for
@@ -7037,6 +7478,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         if presenter_status == Some(PresenterStatus::Pending) {
             if self.presenter_frames < PRESENTER_STARTUP_FRAMES {
                 self.presenter_frames += 1;
+                next_frame_pending = true;
                 window.request_animation_frame();
             }
         }
@@ -7048,24 +7490,43 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 self.handle_pointer_with_modifiers(logical, modifiers);
             }
             if self.hover_pick_outstanding() {
+                next_frame_pending = true;
                 window.request_animation_frame();
             }
         }
+        // This paint is the one the previous paint asked for so the presenter could hand
+        // its frame over (see the end of `render`): it presents and draws nothing.
+        let present_poll = std::mem::take(&mut self.present_poll);
         // The image path's readback is deferred: collect the completed image here. A
         // paint that was requested only to poll for it does not mark the scene dirty,
-        // so the loop stops once the image lands; a real invalidation does, and the
-        // next draw captures the newer state.
-        let poll = std::mem::take(&mut self.readback_poll);
+        // so the loop stops once the image lands; a real invalidation does, and the next
+        // draw captures the newer state. A **present-only** paint is the same shape for the
+        // presenter: it must not mark the scene, or it would submit a frame of its own.
+        let poll = std::mem::take(&mut self.readback_poll) || present_poll;
         if !poll {
-            self.readback_dirty = true;
+            self.scene_dirty = true;
         }
         if let Some(result) = self.view.take_image() {
             if let Ok(image) = result {
                 self.frame = Some(Arc::new(render_image(image)));
             }
         }
-        let draw = self.readback_dirty && !self.view.image_pending();
+        let draw = self.scene_dirty && !self.view.image_pending();
         self.refresh_with(draw);
+        // The zero-copy ring can only hand gpui a frame whose GPU work has already
+        // completed, which is never the frame this paint just gave it: a paint shows the
+        // frame the previous paint drew. An animation paints again anyway, so the trail is
+        // invisible — but a discrete update (a click, one hover move) would be drawn and
+        // never shown until some later event repainted it, which is exactly the "the ghost
+        // stays, then the next event moves it" report. Ask for one more paint, and let it
+        // be present-only (`present_poll`): drawing again would give the presenter another
+        // unshowable frame and the wait would repeat forever. The ask is made here, after
+        // the draw, because `present` runs later in this same paint — a signal from there
+        // would arrive too late to schedule anything.
+        if self.presenter_drew && !next_frame_pending && self.presenter_defers_presentation() {
+            self.present_poll = true;
+            window.request_animation_frame();
+        }
         if self.view.image_pending() {
             self.readback_poll = true;
             window.request_animation_frame();
@@ -7152,7 +7613,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.emit(ViewportEvent::ToolState(status));
                 }
                 if changed {
-                    cx.notify();
+                    this.changed(cx);
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
@@ -7166,7 +7627,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     ScrollDelta::Pixels(pixels) => pixels.y.as_f32() / 40.0,
                 };
                 if this.handle_scroll(lines) {
-                    cx.notify();
+                    this.changed(cx);
                 }
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
@@ -7185,7 +7646,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.emit(ViewportEvent::ToolState(status));
                 }
                 if changed {
-                    cx.notify();
+                    this.changed(cx);
                 }
             }))
             .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -7206,7 +7667,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.emit(ViewportEvent::ToolState(status));
                 }
                 if changed {
-                    cx.notify();
+                    this.changed(cx);
                 }
             }))
             // A release in bounds and a release anywhere else both end the gesture: gpui
@@ -7238,13 +7699,13 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                         .drag_move_with_modifiers(position, gizmo_modifiers(event.event.modifiers));
                     this.flush_transform_preview(cx);
                     if changed {
-                        cx.notify();
+                        this.changed(cx);
                     }
                 },
             ))
             .on_mouse_exit(cx.listener(|this, _event: &MouseExitEvent, _window, cx| {
                 if this.handle_pointer_leave() {
-                    cx.notify();
+                    this.changed(cx);
                 }
             }))
             .child(content);
@@ -7456,8 +7917,8 @@ const CHROME_HEIGHT: f32 = 26.0;
 /// The gap between the cube's overlay rect and the pill, toward the viewport centre.
 /// Tucked to zero so the pill and the cube read as one column.
 const CHROME_GAP: f32 = 0.0;
-/// The chrome pill's glass tint: the shell `BG` at 60%.
-const CHROME_BG: u32 = 0x0f121899;
+/// The chrome pill's glass tint: the shared wheel-glass token (`ui::WHEEL_GLASS`).
+const CHROME_BG: u32 = WHEEL_GLASS;
 const CHROME_FONT: f32 = 11.0;
 
 /// The chrome bar's logical rect `[left, top, right, bottom]` under `cube`.
@@ -7520,7 +7981,7 @@ fn projection_button<V: InventorView + 'static>(
         .h(px(18.))
         .flex()
         .items_center()
-        .px(px(5.))
+        .px(px(4.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
         .text_color(rgb(if active { CHROME_ACTIVE } else { MUTED }))
@@ -7530,7 +7991,7 @@ fn projection_button<V: InventorView + 'static>(
         .child(label)
         .on_click(cx.listener(move |this, _ev, _win, cx| {
             if this.set_orthographic(orthographic) {
-                cx.notify();
+                this.changed(cx);
             }
         }))
 }
@@ -7575,7 +8036,7 @@ fn yaw_button<V: InventorView + 'static>(
         .h(px(18.))
         .flex()
         .items_center()
-        .px(px(4.))
+        .px(px(3.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
         .text_color(rgb(MUTED))
@@ -7584,7 +8045,7 @@ fn yaw_button<V: InventorView + 'static>(
         .child(label)
         .on_click(cx.listener(move |this, _ev, _win, cx| {
             if this.yaw(direction) {
-                cx.notify();
+                this.changed(cx);
             }
         }))
 }
@@ -7641,7 +8102,7 @@ fn navicube_chrome<V: InventorView + 'static>(
         .h(px(18.))
         .flex()
         .items_center()
-        .px(px(5.))
+        .px(px(3.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
         .text_color(rgb(MUTED))
@@ -7650,18 +8111,40 @@ fn navicube_chrome<V: InventorView + 'static>(
         .child("Home")
         .on_click(cx.listener(|this, _ev, _win, cx| {
             if this.go_home() {
-                cx.notify();
+                this.changed(cx);
+            }
+        }));
+
+    // `Fit` is a view verb, so it belongs with the other view controls beside the
+    // navicube rather than over the canvas with the environment toggles. It frames the
+    // same stage the `App_Fit` command does, without a trip through the registry.
+    let fit = div()
+        .id("ferrocad-navicube-fit")
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .px(px(3.))
+        .rounded_sm()
+        .text_size(px(CHROME_FONT))
+        .text_color(rgb(MUTED))
+        .cursor_pointer()
+        .hover(|style| style.text_color(rgb(FG)))
+        .child("Fit")
+        .on_click(cx.listener(|this, _ev, _win, cx| {
+            if this.frame_stage() {
+                this.changed(cx);
             }
         }));
 
     let readout = div()
         .flex_1()
+        .min_w_0()
         .flex()
         .justify_end()
         .items_center()
         .text_size(px(CHROME_FONT))
         .text_color(rgb(MUTED))
-        .child(format!("{:03.0}° · {:02.0}°", angles.0, angles.1));
+        .child(format!("{:03.0}° {:02.0}°", angles.0, angles.1));
 
     div()
         .absolute()
@@ -7672,17 +8155,19 @@ fn navicube_chrome<V: InventorView + 'static>(
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .px(px(5.))
+        .gap(px(2.))
+        .px(px(4.))
         .rounded_sm()
         .bg(rgba(CHROME_BG))
         .border_1()
         .border_color(rgba(CHROME_LINE))
+        .overflow_hidden()
         .occlude()
         .child(yaws)
         .child(projections)
         .child(divider)
         .child(home)
+        .child(fit)
         .child(readout)
 }
 
@@ -7779,9 +8264,9 @@ fn snap_pill(local: [f64; 2], anchor: [f32; 2]) -> impl IntoElement {
         .px(px(6.))
         .py(px(2.))
         .rounded_sm()
-        .bg(rgba(0x0f1218cc))
+        .bg(rgba(WHEEL_GLASS))
         .border_1()
-        .border_color(rgba(0xffffff14))
+        .border_color(rgba(CHROME_LINE))
         .text_size(px(11.))
         .font_family("monospace")
         .text_color(rgb(CHROME_ACTIVE))
@@ -7797,9 +8282,9 @@ fn readout_pill(text: String, anchor: [f32; 2]) -> impl IntoElement {
         .px(px(6.))
         .py(px(2.))
         .rounded_sm()
-        .bg(rgba(0x0f1218cc))
+        .bg(rgba(WHEEL_GLASS))
         .border_1()
-        .border_color(rgba(0xffffff14))
+        .border_color(rgba(CHROME_LINE))
         .text_size(px(11.))
         .font_family("monospace")
         .text_color(rgb(CHROME_ACTIVE))
@@ -7985,7 +8470,7 @@ fn ring_press_is_locked(locked: ferrocad_stage::GizmoAxis, target: GizmoTarget) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_graphics::{Projection, ShadowFootprint, Topology};
+    use ferrocad_graphics::{Projection, ShadowFootprint, Topology, Viewport};
     use ferrocad_inventor::{Node, NodeKind, compile_with_base};
     use ferrocad_stage::{DrawMode, GizmoHandle, ShapeItem};
     use ferrocad_types::{Placement, Rotation, Vector3};
@@ -8305,8 +8790,10 @@ mod tests {
         view.set_stage(Stage::new().with_item(named_slab()));
         view.refresh();
 
-        // A click is a press and release without movement: left half → Face1.
-        assert!(!view.handle_button([30.0, 50.0], 1, true));
+        // A click is a press and release without movement: left half → Face1. The press
+        // itself resolves what the pointer is over (the host's highlight is drawn from
+        // that), but the selection is the release's.
+        view.handle_button([30.0, 50.0], 1, true);
         assert!(
             view.handle_button([30.0, 50.0], 1, false),
             "the selection update repaints"
@@ -8612,7 +9099,7 @@ mod tests {
     #[test]
     fn an_orbit_drag_is_not_a_selection() {
         let mut view = identity_viewport(triangle_scene_with_id(9));
-        assert!(!view.handle_button([50.0, 50.0], 1, true));
+        view.handle_button([50.0, 50.0], 1, true);
         assert!(view.drag_move([70.0, 50.0]));
         view.handle_button([70.0, 50.0], 1, false);
         assert_eq!(view.take_selection(), None, "an orbit selects nothing");
@@ -8968,6 +9455,9 @@ mod tests {
         draws: Rc<std::cell::Cell<u32>>,
         size: [u32; 2],
         pick: Option<u32>,
+        /// Whether the presenter defers a drawn frame to the next paint, like the dma-buf
+        /// ring.
+        defers: bool,
     }
 
     impl Presenter for TestPresenter {
@@ -8983,6 +9473,9 @@ mod tests {
             true
         }
         fn present(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+        fn defers_presentation(&self) -> bool {
+            self.defers
+        }
         fn pick_at(
             &mut self,
             _queue: &RenderQueue,
@@ -9016,6 +9509,7 @@ mod tests {
             draws: draws.clone(),
             size: [0, 0],
             pick: None,
+            defers: false,
         };
         let mut viewport =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
@@ -9032,6 +9526,77 @@ mod tests {
         );
     }
 
+    /// A paint asked for only so the presenter can hand over the frame it already drew
+    /// must not submit another one.
+    ///
+    /// The dma-buf ring presents only a frame whose GPU work has completed, and that is
+    /// never the frame the same paint submitted: a paint shows the previous frame. `render`
+    /// therefore asks for one extra paint after a discrete update, and that paint has to be
+    /// present-only — a paint that drew would leave a frame it could not present, and the
+    /// request would repeat forever.
+    #[test]
+    fn a_present_only_paint_does_not_draw() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let draws = Rc::new(std::cell::Cell::new(0));
+        let presenter = TestPresenter {
+            status: PresenterStatus::Ready,
+            draws: draws.clone(),
+            size: [0, 0],
+            pick: None,
+            defers: false,
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_presenter(Box::new(presenter));
+        viewport.apply_element_size([100.0, 100.0], 1.0);
+
+        viewport.refresh_with(true);
+        assert_eq!(draws.get(), 1, "a changed scene draws");
+
+        viewport.refresh_with(false);
+        assert_eq!(draws.get(), 1, "a present-only paint submits no frame");
+        assert_eq!(
+            viewport.view().image_calls, 0,
+            "and it does not fall back to a readback either"
+        );
+
+        viewport.refresh_with(true);
+        assert_eq!(draws.get(), 2, "the next change draws again");
+    }
+
+    /// Only a paint that gave the presenter a frame schedules the paint that shows it.
+    ///
+    /// `present` runs after `render` in the same paint, so a signal from there would
+    /// arrive too late to schedule anything; `render` therefore decides from what
+    /// `refresh_with` just did. A present-only paint must report that it drew nothing, or
+    /// it would ask for another one and the viewport would never stop painting.
+    #[test]
+    fn only_a_drawing_paint_defers_a_frame() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let presenter = TestPresenter {
+            status: PresenterStatus::Ready,
+            draws: Rc::new(std::cell::Cell::new(0)),
+            size: [0, 0],
+            pick: None,
+            defers: false,
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_presenter(Box::new(presenter));
+
+        viewport.refresh_with(true);
+        assert!(viewport.presenter_drew, "the presenter took a frame");
+
+        viewport.refresh_with(false);
+        assert!(!viewport.presenter_drew, "a present-only paint took none");
+    }
+
     #[test]
     fn a_pending_presenter_keeps_the_image_fallback() {
         let camera = Camera {
@@ -9044,6 +9609,7 @@ mod tests {
             draws: draws.clone(),
             size: [0, 0],
             pick: None,
+            defers: false,
         };
         let mut viewport =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
@@ -9992,6 +10558,7 @@ mod tests {
             draws: Rc::new(std::cell::Cell::new(0)),
             size: [0, 0],
             pick: Some(99),
+            defers: false,
         };
         // `HardwarePickView` would report 42; the presenter's window-device G-buffer
         // reports 99 and must win, for hover and for button events alike.
@@ -10701,7 +11268,7 @@ mod tests {
             view.gizmo().expect("gizmo").hit(&view.camera, [60, 60]),
             None
         );
-        assert!(!view.handle_button(viewport.to_logical([60, 60]), 1, true));
+        view.handle_button(viewport.to_logical([60, 60]), 1, true);
         assert!(!view.gizmo().expect("gizmo").is_dragging());
         assert!(
             view.orbit_drag.is_some(),
@@ -12341,8 +12908,10 @@ mod tests {
     fn the_grid_draws_but_is_never_picked() {
         let mut viewport = grid_view();
 
-        // Five packets: the dots, the major lines, the triad ribbons, the occluded
-        // triad ghost, and the origin node.
+        // Five packets: the dot sprites, the major lines, the triad ribbons, the occluded
+        // triad ghost, and the origin node. The dots are sprites and the hairlines are
+        // `LineList`s: the grid is a screen-space mark set, so nothing about it follows the
+        // camera.
         let topologies: Vec<Topology> = viewport
             .grid_queue
             .packets
@@ -12352,12 +12921,16 @@ mod tests {
         assert_eq!(
             topologies,
             vec![
-                Topology::Points,
+                Topology::Triangles,
                 Topology::Lines,
                 Topology::Triangles,
                 Topology::Triangles,
                 Topology::Lines
             ]
+        );
+        assert!(
+            viewport.grid_queue.packets[0].state.sprite,
+            "the dot field is a screen-space sprite"
         );
 
         // The grid is scaffolding, not geometry: it lives outside the scene queue and
@@ -13096,11 +13669,17 @@ mod tests {
         );
     }
 
+    /// A camera move rebuilds nothing that a camera cannot change.
+    ///
+    /// The lattice is the spec's and the marks are screen-space (points and hairlines), so the
+    /// ground key is camera-independent: an orbit — or a zoom — must not re-tessellate the
+    /// grid, which is what made dragging a grid-heavy scene stutter. Only the screen-facing
+    /// triad follows the camera.
     #[test]
-    fn an_orbit_rebuilds_the_triad_but_not_the_ground() {
+    fn a_camera_move_rebuilds_the_triad_but_not_the_ground() {
         let mut viewport = grid_view();
         // A fixed extent, so the disc (which follows the camera's eye distance) cannot be
-        // what changes the ground: this test is about the camera *not* moving the lattice.
+        // what changes the ground.
         assert!(viewport.set_grid_radius(Some(500.0)));
         let generations = |viewport: &InventorViewport<FakeView>| {
             let packets = &viewport.grid_queue.packets;
@@ -13117,12 +13696,74 @@ mod tests {
         viewport.recompile();
 
         let (ground_after, lines_after, triad_after) = generations(&viewport);
-        assert_eq!(ground, ground_after, "the dot field is camera-independent");
-        assert_eq!(lines, lines_after, "the major lines are camera-independent");
+        assert_eq!(
+            ground, ground_after,
+            "the dot field is screen-space: a camera move cannot rebuild it"
+        );
+        assert_eq!(lines, lines_after, "the lattice is world-space too");
         assert_ne!(
             triad, triad_after,
             "the screen-facing triad follows the camera"
         );
+    }
+
+    /// A dot is a **screen-space sprite**: the renderer expands it to a fixed pixel size,
+    /// so the host sends no world width for it at all.
+    ///
+    /// A world-space dot would be geometry: bigger near the camera, smaller far from it, and
+    /// — through the style key — a full lattice rebuild on every orbiting frame. The Coin
+    /// frame takes `0` too and draws its own disc from the fragment's pixel scale.
+    #[test]
+    fn a_dot_has_no_world_width() {
+        let mut view = slab_view();
+        assert!(view.set_axis_cross(false));
+        let frame = |view: &InventorViewport<FakeView>| {
+            view.active_workplane()
+                .view_workplane(&view.camera, view.grid_policy(), view.grid_radius)
+        };
+        assert_eq!(frame(&view).minor_width, 0.0, "dots are sprites, not quads");
+        assert!(view.set_grid_stroke(grid::MinorStyle::Lines, 2.0, 3.0));
+        assert!(
+            frame(&view).minor_width > 0.0,
+            "the lattice keeps its stroke width"
+        );
+    }
+
+    /// A camera move does not recompile the scene or its program overlays.
+    ///
+    /// `refresh_with` recompiles only when the *stage* is dirty; a camera or pointer event
+    /// goes through [`camera_moved`](InventorViewport::camera_moved), which is `sync_grid`
+    /// alone. The check is the queue's own allocations: a recompile builds new `Arc`s, so
+    /// pointer-equal geometry across a camera move proves nothing was rebuilt.
+    #[test]
+    fn a_camera_move_does_not_recompile_the_scene_or_its_programs() {
+        let draws = Rc::new(RefCell::new(Vec::new()));
+        let mut view = program_plane_view(draws);
+        let before: Vec<_> = view
+            .program_queue
+            .packets
+            .iter()
+            .filter_map(|packet| packet.geometry.clone())
+            .collect();
+        assert!(!before.is_empty(), "the overlay compiled a program packet");
+
+        view.camera.view =
+            Placement::new(Vector3::new(0.0, 0.0, -40.0), Rotation::identity()).to_matrix();
+        view.refresh();
+
+        let after: Vec<_> = view
+            .program_queue
+            .packets
+            .iter()
+            .filter_map(|packet| packet.geometry.clone())
+            .collect();
+        assert_eq!(before.len(), after.len());
+        for (before, after) in before.iter().zip(&after) {
+            assert!(
+                std::sync::Arc::ptr_eq(before, after),
+                "a camera move recompiled the scene"
+            );
+        }
     }
 
     /// The identity camera with the named slab (`Face1`/`Face2` at `z = 0.5`) and the
@@ -13219,8 +13860,10 @@ mod tests {
         assert_eq!(local_packets(&view), 0, "no face grid before the dwell");
         let world_alpha = max_alpha(&view.grid_queue.packets[0]);
 
-        // Past the dwell the local layer blooms: coplanar with the face, depth-biased,
-        // and the world level recedes.
+        // Past the dwell the local layer previews the face: coplanar with it, depth-biased,
+        // and at the plane's stronger ink. It is drawn **in addition**: a hover is a hint
+        // about what a click would bind, so it must not take the grid the user is already
+        // working on off the screen (that flickered as the pointer crossed a face).
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
         assert!(
@@ -13241,9 +13884,38 @@ mod tests {
                 );
             }
         }
+        // The ambient ground is still there, at exactly the ink it had before the pointer
+        // moved: a preview is not a lock, so it neither hides the ground nor dims it.
+        let ground = |view: &InventorViewport<FakeView>| {
+            let world = &view.grid.world;
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| {
+                    packet.mesh_id == world.dots_mesh
+                        || packet.mesh_id == world.minor_mesh
+                        || packet.mesh_id == world.lines_mesh
+                })
+                .count()
+        };
         assert!(
-            max_alpha(&view.grid_queue.packets[0]) < world_alpha * 0.5,
-            "the world grid recedes under a local plane"
+            ground(&view) > 0,
+            "the world ground stays while a face is previewed"
+        );
+        assert!(
+            (max_alpha(&view.grid_queue.packets[0]) - world_alpha).abs() < 1e-6,
+            "the preview does not change the ground's ink"
+        );
+        let preview = view
+            .grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.depth_bias > 0.0)
+            .map(max_alpha)
+            .fold(0.0, f32::max);
+        assert!(
+            preview > world_alpha,
+            "the preview patch out-inks the ground: {preview} vs {world_alpha}"
         );
     }
 
@@ -13393,9 +14065,19 @@ mod tests {
         let mut floating = GridLayer::new(0.0);
         floating.sync(&camera, &spec(WorkplaneKind::Datum("Sheet".into())), &style, &axis);
 
-        assert_eq!(face.triad.len() + 4, floating.triad.len(), "no `+N` stem on a face");
-        assert_eq!(face.triad_indices.len() + 6, floating.triad_indices.len());
-        assert!(!face.triad.is_empty(), "the `U`/`V` bracket is still there");
+        assert_eq!(
+            face.triad.as_ref().map_or(0, |level| level.geometry.vertices.len()) + 4,
+            floating.triad.as_ref().map_or(0, |level| level.geometry.vertices.len()),
+            "no `+N` stem on a face"
+        );
+        assert_eq!(
+            face.triad.as_ref().map_or(0, |level| level.geometry.indices.len()) + 6,
+            floating
+                .triad
+                .as_ref()
+                .map_or(0, |level| level.geometry.indices.len())
+        );
+        assert!(face.triad.is_some(), "the `U`/`V` bracket is still there");
     }
 
     #[test]
@@ -13620,10 +14302,16 @@ mod tests {
         assert_eq!(major, ground_steps(radius).1);
         assert!(minor >= ground_steps(radius).0);
         assert!(
-            view.grid_queue
+            !view
+                .grid_queue
                 .packets
-                .iter()
-                .any(|packet| packet.topology == Topology::Points),
+                .first()
+                .expect("the dots")
+                .geometry
+                .as_ref()
+                .expect("fresh dot geometry")
+                .vertices
+                .is_empty(),
             "the adaptive ground still draws its dots"
         );
 
@@ -13772,20 +14460,26 @@ mod tests {
             (grid::MinorStyle::Dots, 1.0, 1.0),
             "the default is dots at the hairline"
         );
+        // A hairline ground is one sprite packet plus hairlines: the dots are screen-space
+        // sprites, so a camera move cannot rebuild them and nothing here is a world-sized
+        // quad.
         assert!(
             view.grid_queue
                 .packets
                 .iter()
-                .all(|packet| packet.topology != Topology::Triangles),
-            "a hairline ground is lines and points, not quads"
+                .all(|packet| packet.state.sprite || packet.topology != Topology::Triangles),
+            "a hairline ground is sprites and lines, not quads"
+        );
+        assert!(
+            view.grid_queue
+                .packets
+                .iter()
+                .any(|packet| packet.state.sprite),
+            "the dot field is a sprite per intersection"
         );
 
         assert!(view.set_grid_stroke(grid::MinorStyle::Lines, 3.0, 2.0));
         let packets = &view.grid_queue.packets;
-        assert!(
-            packets.iter().all(|packet| packet.topology != Topology::Points),
-            "the lattice replaces the dots"
-        );
         assert!(
             packets
                 .iter()
@@ -13807,14 +14501,6 @@ mod tests {
                 .filter(|packet| packet.topology == Topology::Triangles)
                 .all(|packet| packet.state.depth == BLENDED_DEPTH),
             "a wide grid stroke blends its ink"
-        );
-        // The hairlines keep the depth-writing default: only the quads need the variant.
-        assert!(
-            packets
-                .iter()
-                .filter(|packet| packet.topology != Topology::Triangles)
-                .all(|packet| packet.state.depth == DepthState::default()),
-            "a hairline is unchanged"
         );
 
         // The same stroke reaches the Coin frame, in the plane's units.
@@ -13847,13 +14533,14 @@ mod tests {
         view.refresh();
 
         // The world axis line (`v = 0`) is the one at the origin's depth, so its quad's
-        // lateral corners are exactly 6 px apart.
+        // lateral corners are exactly 6 px apart. The major lattice is emitted last: the
+        // dots come first and are triangles too.
         let packet = view
             .grid_queue
             .packets
             .iter()
             .filter(|packet| packet.topology == Topology::Triangles)
-            .max_by_key(|packet| packet.geometry.as_ref().map_or(0, |g| g.vertices.len()))
+            .last()
             .expect("the major stroke");
         let vertices = &packet.geometry.as_ref().unwrap().vertices;
         let at = |v: &Vertex| {
@@ -13925,17 +14612,47 @@ mod tests {
         assert!((minor - grid::GRID_ALPHA).abs() < 1e-6, "{minor}");
         assert!((major - grid::GRID_ALPHA).abs() < 1e-6, "{major}");
 
-        // A bound face keeps the workplane's 1:2 minor:major ratio.
+        // A bound face keeps the workplane's `1:2` minor:major ratio, at the stronger
+        // finite-surface ink (the plane sits on a lit facet, not the void).
         assert!(view.set_workplane_from_element(7, Some("Face1")));
         let (minor, major) = ink(&view);
-        assert!((minor - grid::GRID_ALPHA).abs() < 1e-6);
-        assert!((major - 2.0 * grid::GRID_ALPHA).abs() < 1e-6, "{major}");
+        assert!((minor - grid::WORKPLANE_MINOR_ALPHA).abs() < 1e-6);
+        assert!((major - grid::WORKPLANE_MAJOR_ALPHA).abs() < 1e-6, "{major}");
 
         // The user's opacity multiplies both, in the shader as in the generator.
         assert!(view.set_grid_alpha(0.5));
         let (minor, major) = ink(&view);
-        assert!((minor - 0.5 * grid::GRID_ALPHA).abs() < 1e-6, "{minor}");
-        assert!((major - grid::GRID_ALPHA).abs() < 1e-6, "{major}");
+        assert!((minor - 0.5 * grid::WORKPLANE_MINOR_ALPHA).abs() < 1e-6, "{minor}");
+        assert!((major - 0.5 * grid::WORKPLANE_MAJOR_ALPHA).abs() < 1e-6, "{major}");
+    }
+
+    /// A finite-surface plane is drawn over a lit facet, not the void, so its ink has to
+    /// clear `GLASS_TOP`; the ground's alpha does not (and does not need to). This pins
+    /// the luminance step the workplane's alphas buy, using the same composite the
+    /// renderer's alpha blending produces.
+    #[test]
+    fn the_workplane_ink_clears_the_lit_glass_facet() {
+        use ferrocad_theme::draw::GLASS_TOP;
+
+        let luminance = |color: [f32; 4]| {
+            0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
+        };
+        let over_glass = |ink: [f32; 4], alpha: f32| {
+            alpha * luminance(ink) + (1.0 - alpha) * luminance(GLASS_TOP)
+        };
+        // WCAG relative contrast against the facet the plane is drawn on.
+        let contrast = |value: f32| (value + 0.05) / (luminance(GLASS_TOP) + 0.05);
+
+        let ground = contrast(over_glass(grid::GRID_COLOR, grid::GRID_ALPHA));
+        let plane = contrast(over_glass(grid::GRID_COLOR, grid::WORKPLANE_MAJOR_ALPHA));
+        assert!(
+            plane >= 1.9,
+            "the workplane's major level clears the lit facet: {plane:.2}:1"
+        );
+        assert!(
+            plane > ground * 1.25,
+            "and clearly out-inks the ground it replaces: {plane:.2} vs {ground:.2}"
+        );
     }
 
     /// The program (Coin) grid's patch radius is the native grid's rule, and `0` for a
@@ -14090,6 +14807,127 @@ mod tests {
         assert!(bound.radius > 0.0);
     }
 
+    /// A view that records every program-carrying view of a frame: its plane and how many
+    /// packets it draws.
+    struct ProgramPlaneView {
+        draws: Rc<RefCell<Vec<Vec<(Option<WorkplaneFrame>, usize)>>>>,
+    }
+
+    impl InventorView for ProgramPlaneView {
+        type Surface = ();
+        type Error = std::io::Error;
+
+        fn size(&self) -> [u32; 2] {
+            [100, 100]
+        }
+        fn draw(&mut self, _queue: &RenderQueue, _camera: &Camera) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn borrow_surface(&self) -> Option<&()> {
+            None
+        }
+        fn image(&mut self) -> Result<ImageData, Self::Error> {
+            Ok(ImageData::default())
+        }
+        fn draw_frame(&mut self, views: &[ViewSpec<'_>]) -> Result<(), Self::Error> {
+            self.draws.borrow_mut().push(
+                views
+                    .iter()
+                    .filter(|view| {
+                        view.queue
+                            .packets
+                            .iter()
+                            .any(|packet| packet.state.program.is_some())
+                    })
+                    .map(|view| (view.workplane, view.queue.len()))
+                    .collect(),
+            );
+            Ok(())
+        }
+    }
+
+    /// The identity camera and the named slab, a tool armed, and a recording view. Two
+    /// overlays are registered: an unowned one (a stand-in for a HUD) and the grid
+    /// provider's.
+    fn program_plane_view(
+        draws: Rc<RefCell<Vec<Vec<(Option<WorkplaneFrame>, usize)>>>>,
+    ) -> InventorViewport<ProgramPlaneView> {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut view = InventorViewport::new(ProgramPlaneView { draws }, camera, Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.set_grid(true);
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.set_overlays_tagged(vec![
+            // A non-grid overlay: drawn on the active plane, never on the candidate.
+            OverlayScene {
+                role: None,
+                scene: program_scene(),
+            },
+            OverlayScene {
+                role: Some(GRID_OVERLAY_ROLE.to_owned()),
+                scene: program_scene(),
+            },
+        ]);
+        view.set_grid_overlay(true);
+        view.refresh();
+        view
+    }
+
+    /// The promise the native preview makes — a click does not move the grid it was
+    /// previewing — holds for a **provider** too, and the provider's grid is drawn on the
+    /// **locked** plane throughout: while the pointer rests on a face a click would bind,
+    /// the candidate is drawn on top as well, in its own pass.
+    #[test]
+    fn a_grid_provider_previews_the_plane_the_click_binds() {
+        let draws = Rc::new(RefCell::new(Vec::new()));
+        let mut view = program_plane_view(draws.clone());
+
+        assert!(view.handle_pointer([32.0, 37.0]));
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.refresh();
+
+        let frame = draws.borrow().last().cloned().expect("a draw");
+        assert_eq!(
+            frame.len(),
+            3,
+            "the locked plane's grid, the preview's grid, the other overlays"
+        );
+        assert_eq!(frame[0].1, 1, "the locked grid is one program packet");
+        assert_eq!(frame[1].1, 1, "so is the preview");
+        assert_eq!(frame[2].1, 1, "the overlay pass carries no grid");
+        let locked = frame[0]
+            .0
+            .expect("the locked grid carries its plane");
+        let candidate = frame[1].0.expect("the preview carries the candidate plane");
+        let active = frame[2]
+            .0
+            .expect("the overlay pass draws on the active plane");
+        assert_eq!(locked.origin, active.origin, "the locked grid is the active plane");
+        assert_ne!(candidate.origin, locked.origin, "the preview is a second plane");
+
+        assert!(view.activate_hovered_workplane(), "the click binds the face");
+        view.refresh();
+        let frame = draws.borrow().last().cloned().expect("a draw");
+        assert_eq!(
+            frame.len(),
+            2,
+            "after the click there is no preview to draw"
+        );
+        assert_eq!(
+            frame[0].0.expect("the bound plane"),
+            candidate,
+            "the bound plane is drawn on exactly the frame the preview showed"
+        );
+        assert_eq!(
+            frame[1].0.expect("the active plane"),
+            candidate,
+            "the overlay pass follows the active plane, which is now the face"
+        );
+    }
+
     #[test]
     fn hovering_a_face_while_idle_does_not_bloom_a_grid() {
         let mut view = slab_view();
@@ -14125,6 +14963,86 @@ mod tests {
             view.grid_queue.len(),
             bound,
             "a bound plane never previews another face"
+        );
+    }
+
+    /// Hovering a face never takes the grid away from the plane in force.
+    ///
+    /// A preview is a hint about what a click would bind, and a hint is not a state: the
+    /// grid the user is working on has to look the same whether or not the pointer happens
+    /// to rest on a face. Making the preview *replace* the ambient ground (as the locked
+    /// case replaces it) meant that placing a shape on the world grid and then resting the
+    /// pointer on the shape blanked the grid that shape was placed on — the flicker this
+    /// pins. The bound case is the same rule from the other side: hovering elsewhere
+    /// cannot move a locked plane either.
+    #[test]
+    fn a_hover_never_takes_the_grid_away() {
+        let ground = |view: &InventorViewport<FakeView>| {
+            let world = &view.grid.world;
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| {
+                    packet.mesh_id == world.dots_mesh
+                        || packet.mesh_id == world.minor_mesh
+                        || packet.mesh_id == world.lines_mesh
+                })
+                .count()
+        };
+
+        // The ambient ground is drawn before the pointer rests, during the preview, and
+        // after the pointer leaves — at the same ink.
+        let mut view = tool_view();
+        view.sync_grid();
+        let before = ground(&view);
+        let ink = max_alpha(&view.grid_queue.packets[0]);
+        assert!(before > 0, "the world ground draws");
+        let cross = |view: &InventorViewport<FakeView>| {
+            view.grid_queue
+                .packets
+                .iter()
+                .find(|packet| packet.mesh_id == view.grid.world.triad_mesh)
+                .map(max_alpha)
+                .unwrap_or(0.0)
+        };
+        let cross_full = cross(&view);
+        assert!(cross_full > 0.0, "the world cross draws");
+
+        view.handle_pointer([30.0, 50.0]);
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        assert!(local_packets(&view) > 0, "the face preview is up");
+        assert_eq!(ground(&view), before, "the ground stays under the preview");
+        assert!(
+            (max_alpha(&view.grid_queue.packets[0]) - ink).abs() < 1e-6,
+            "and at its own ink"
+        );
+        // The world **cross** does recede: the plane's own cross has to be the only
+        // full-strength one, and a dimmed cross still locates the world origin.
+        assert!(
+            (cross(&view) - cross_full * ferrocad_stage::grid::WORLD_TRIAD_DIM).abs() < 1e-6,
+            "the world cross recedes to the triad dim: {} of {cross_full}",
+            cross(&view)
+        );
+
+        assert!(view.handle_pointer([99.0, 99.0]));
+        view.sync_grid();
+        assert_eq!(local_packets(&view), 0, "the preview is gone");
+        assert_eq!(ground(&view), before, "the ground never moved");
+
+        // A **locked** plane: hovering another face cannot touch its grid either.
+        let mut view = tool_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane(), "the plane is locked");
+        view.sync_grid();
+        let locked = local_geometry(&view);
+        assert!(!locked.is_empty());
+        assert!(view.handle_pointer([70.0, 50.0]));
+        view.sync_grid();
+        assert_eq!(
+            local_geometry(&view),
+            locked,
+            "a hover elsewhere leaves the locked plane's grid exactly as it was"
         );
     }
 
@@ -14309,6 +15227,166 @@ mod tests {
     fn click(view: &mut InventorViewport<FakeView>, logical: [f32; 2]) {
         view.handle_button(logical, 1, true);
         view.handle_button(logical, 1, false);
+    }
+
+    /// A click names what it hit, and the host's Inspect highlight follows that.
+    ///
+    /// The highlight is drawn from `hover_report`, which is filled by the **deferred**
+    /// hover pick: while a pick is in flight it reports the previous pixel, so a click that
+    /// arrived before the answer landed left the report empty and the face unhighlighted
+    /// until the next move. A button event resolves its own pick (it waits for it), so it is
+    /// the freshest statement about what the pointer is over.
+    #[test]
+    fn a_click_refreshes_what_the_pointer_is_over() {
+        let mut view = slab_view();
+        // The state a deferred pick leaves behind: the pointer is over Face1, the report
+        // still says nothing.
+        view.hover_report = HoverReport::default();
+        view.hover = None;
+        view.hovered_part = None;
+
+        click(&mut view, [30.0, 50.0]);
+        assert_eq!(
+            view.hovered(),
+            Some(PickId(7)),
+            "the click names the entity it hit"
+        );
+        let target = view.hover_report().target.clone().expect("a target");
+        assert_eq!(
+            target.elements.first().map(String::as_str),
+            Some("Face1"),
+            "and the sub-element, which is what the highlight outlines"
+        );
+    }
+
+    /// A click anchors a box exactly where its ghost was previewing.
+    ///
+    /// The ghost and the press resolve the **same** snap — the placement frame's origin —
+    /// so the box cannot jump between the preview and the click, which is what a user sees
+    /// as "the ghost stays put and then moves on the next event". The shell harness cannot
+    /// pin this: its canvas height settles asynchronously, so the same logical point maps
+    /// through two cameras there.
+    #[test]
+    fn a_click_anchors_the_box_where_its_ghost_was() {
+        let mut view = tool_view();
+        view.set_tool(Some(Box::new(ferrocad_stage::BoxTool::new())));
+        let corner = |view: &InventorViewport<FakeView>| -> [f32; 3] {
+            view.tool()
+                .expect("the box is armed")
+                .items()
+                .first()
+                .expect("the ghost")
+                .positions()
+                .first()
+                .copied()
+                .expect("a corner")
+        };
+
+        // Over the slab's face, so the placement is the face's own grid: the hover and
+        // the press bind the same plane.
+        view.handle_pointer([30.0, 50.0]);
+        let ghost = corner(&view);
+        click(&mut view, [30.0, 50.0]);
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "the click placed the corner"
+        );
+        assert_eq!(corner(&view), ghost, "the click anchored where the ghost was");
+    }
+
+    /// A ghost never takes its **point** from a pick that belongs to another pixel.
+    ///
+    /// The presenter's pick answers one submission late, and until it does `hover_pick`
+    /// reports the previous pixel's hit. `snap_to_geometry` turns a hit into its world
+    /// point, so the ghost sat where the pointer used to be and only jumped on the next
+    /// event — the "stays, then moves" report. The hit may still name the plane (the best
+    /// answer there is until the pick lands), but never the point.
+    #[test]
+    fn a_deferred_pick_does_not_place_the_ghost_at_the_old_pixel() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        // A hit that names no face of the document: the placement falls back to the hit's
+        // own point, which is exactly the value a stale pick must not supply.
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
+            .with_presenter(Box::new(DeferredPresenter {
+                point: None,
+                pending: false,
+                answer: None,
+            }));
+        view.set_tool(Some(Box::new(ferrocad_stage::BoxTool::new())));
+        let corner = |view: &InventorViewport<FakeView>| -> [f32; 3] {
+            view.tool()
+                .expect("the box is armed")
+                .items()
+                .first()
+                .expect("the ghost")
+                .positions()
+                .first()
+                .copied()
+                .expect("a corner")
+        };
+
+        // Over the body: the first move only asks for a pick, the second collects it.
+        view.handle_pointer([50.0, 50.0]);
+        view.handle_pointer([50.0, 50.0]);
+        // Away from it: `hover_pick` now reports the *previous* pixel's hit, whose point
+        // (`[50, 50]` as world coordinates) is the one the ghost must ignore.
+        view.handle_pointer([10.0, 10.0]);
+        assert!(view.hover_pick_is_stale([10, 10]), "the pick is one pixel behind");
+        let ghost = corner(&view);
+        assert!(
+            ghost[0].abs() < 1.0 && ghost[1].abs() < 1.0,
+            "the ghost follows the pointer, not the stale hit's point: {ghost:?}"
+        );
+    }
+
+
+    /// A click marks the scene for a redraw, so the paint after it cannot be swallowed.
+    ///
+    /// The image path draws only when the scene is marked: a paint the deferred readback
+    /// asked for must not draw again, or it starts another copy and spins. Inferring the
+    /// mark from the paint lost the click whenever it coalesced with such a poll — the
+    /// poll rule skipped the draw, the landed image ended the loop, and the click's frame
+    /// showed up one *event* later (the next pointer move). The mark therefore belongs to
+    /// the change, which is what this pins.
+    #[test]
+    fn a_click_marks_the_scene_for_a_redraw() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_tool(Some(Box::new(ferrocad_stage::BoxTool::new())));
+        view.refresh();
+        assert!(!view.scene_dirty(), "the draw just cleared it");
+        view.handle_pointer([40.0, 45.0]);
+        view.refresh();
+        assert!(!view.scene_dirty(), "a drawn hover leaves nothing stale");
+
+        // The press is held back (it may still become an orbit), so it changes nothing the
+        // image shows; the click is delivered on the release and must mark the scene.
+        assert!(!view.handle_button([40.0, 45.0], 1, true));
+        assert!(!view.scene_dirty(), "a held-back press draws nothing new");
+        assert!(view.handle_button([40.0, 45.0], 1, false));
+        assert!(view.scene_dirty(), "the click asks for the next draw");
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "and it placed the point"
+        );
+
+        // A draw consumes the mark; the following idle paint therefore skips the draw.
+        view.refresh();
+        assert!(!view.scene_dirty());
     }
 
     /// C2: the strip's field write-back reaches the tool and its preview, and a refused
@@ -15693,4 +16771,5 @@ mod tests {
         assert!(view.handle_key(&key("enter")));
         assert_eq!(view.active_workplane(), &explicit);
     }
+
 }

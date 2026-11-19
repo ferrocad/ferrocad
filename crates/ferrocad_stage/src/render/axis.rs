@@ -8,7 +8,7 @@
 //!
 //! Like the grid, this is pure arithmetic: no kernel, no gpui, no Python.
 
-use ferrocad_graphics::{Camera, Projection, Vertex, screen_ribbon};
+use ferrocad_graphics::{Camera, Projection, Vertex, screen_ribbon, theme};
 use ferrocad_types::Vector3;
 
 use crate::grid::hash;
@@ -26,11 +26,10 @@ pub const TRIAD_GHOST_ALPHA: f32 = 0.10;
 
 /// The default stem colours in **linear** RGBA: X `#F87171`, Y `#4ADE80`,
 /// Z `#38BDF8`, each at alpha `1.0` (the style's `opacity` carries the 65 %).
-pub const AXIS_COLORS: [[f32; 4]; 3] = [
-    [0.939, 0.165, 0.165, 1.0],
-    [0.069, 0.730, 0.216, 1.0],
-    [0.040, 0.509, 0.939, 1.0],
-];
+///
+/// The tokens themselves live in [`ferrocad_theme::draw`], so a settings default, the
+/// chrome's axis tags and both backends name the same colour.
+pub const AXIS_COLORS: [[f32; 4]; 3] = [theme::AXIS_X, theme::AXIS_Y, theme::AXIS_Z];
 
 /// The origin triad's appearance.
 ///

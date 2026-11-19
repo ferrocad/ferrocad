@@ -590,8 +590,10 @@ impl Shell {
             match self.move_fields_delta(cx) {
                 Some(delta) => Some(delta),
                 None => {
-                    self.model.lock().unwrap().status =
-                        "move: check the coordinate values".to_string();
+                    self.model
+                        .lock()
+                        .unwrap()
+                        .note_status("move: check the coordinate values");
                     cx.notify();
                     return false;
                 }
@@ -637,7 +639,7 @@ impl Shell {
                 } else {
                     outcome.status
                 };
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 self.refresh(cx);
                 self.sync_stage(cx);
@@ -650,11 +652,11 @@ impl Shell {
                 } else {
                     outcome.error
                 };
-                self.model.lock().unwrap().status = error.clone();
+                self.model.lock().unwrap().note_status(error.clone());
                 self.console_line(error, cx);
             }
             Err(error) => {
-                self.model.lock().unwrap().status = error.clone();
+                self.model.lock().unwrap().note_status(error.clone());
                 self.console_line(error, cx);
             }
         }
@@ -676,7 +678,7 @@ impl Shell {
         self.sync_transform_tape(cx);
         self.sync_locked_ring(cx);
         self.reset_move_fields(cx);
-        self.model.lock().unwrap().status = status.to_string();
+        self.model.lock().unwrap().note_status(status.to_string());
         self.restore_viewport_focus = true;
         cx.notify();
         true
@@ -781,7 +783,7 @@ impl Shell {
                 if let Some(dialog) = self.dialog.as_mut() {
                     dialog.error = Some(error.clone());
                 }
-                self.model.lock().unwrap().status = format!("dialog: {error}");
+                self.model.lock().unwrap().note_status(format!("dialog: {error}"));
                 cx.notify();
             }
             Ok(values) => {
@@ -821,7 +823,7 @@ impl Shell {
                 } else {
                     outcome.status
                 };
-                self.model.lock().unwrap().status = status.clone();
+                self.model.lock().unwrap().note_status(status.clone());
                 self.console_line(status, cx);
                 self.refresh(cx);
                 self.sync_stage(cx);
@@ -839,13 +841,13 @@ impl Shell {
                 if let Some(dialog) = self.dialog.as_mut() {
                     dialog.error = Some(error.clone());
                 }
-                self.model.lock().unwrap().status = error;
+                self.model.lock().unwrap().note_status(error);
             }
             Err(error) => {
                 if let Some(dialog) = self.dialog.as_mut() {
                     dialog.error = Some(error.clone());
                 }
-                self.model.lock().unwrap().status = error;
+                self.model.lock().unwrap().note_status(error);
             }
         }
         cx.notify();
@@ -859,7 +861,7 @@ impl Shell {
         let _ = commands::cancel(cx, &dialog.token);
         self.sync_gizmo_origin(cx);
         self.restore_viewport_focus = true;
-        self.model.lock().unwrap().status = "dialog cancelled".to_string();
+        self.model.lock().unwrap().note_status("dialog cancelled".to_string());
         cx.notify();
     }
 

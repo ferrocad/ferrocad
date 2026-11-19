@@ -9,6 +9,7 @@
 
 pub mod arc;
 pub mod box_tool;
+pub mod primitive;
 pub mod circle;
 pub mod declarative;
 pub mod frame;
@@ -32,6 +33,7 @@ pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use manipulator::{CreationHost, DressUpKind, InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use polygon::PolygonTool;
+pub use primitive::{PrimitiveKind, PrimitiveTool};
 pub use rectangle::RectangleTool;
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,

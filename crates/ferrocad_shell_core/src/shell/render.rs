@@ -682,6 +682,95 @@ pub(super) fn manipulator_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
     )
 }
 
+/// The armed tool's finish pair: the same `✗`/`✓` decision pill the Move form and a
+/// released manipulator use, placed beside the shape being created.
+///
+/// The numbers and the hint stay docked in the completion row (`chrome::tool_pill`); only
+/// the control that ends the session lives in context, so Move, Modify and Create all
+/// finish through one widget instead of one docked pair and two floating ones. It is
+/// anchored at the tool's own placement point
+/// ([`InventorViewport::tool_finish_anchor`]) — the corner a box grows from — so it never
+/// sits under the pointer, where the next click lands, and it follows the same
+/// clamp/freeze rule as the other two pairs.
+///
+/// [`InventorViewport::tool_finish_anchor`]:
+///     ferrocad_viewport::InventorViewport::tool_finish_anchor
+pub(super) fn tool_finish_overlay(
+    shell: &mut Shell,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let viewport = window.viewport_size();
+    let pill = shell
+        .hud_rect
+        .map(|rect| rect.size)
+        .unwrap_or_else(|| size(px(88.0), px(36.0)));
+    let hovered = shell
+        .hud_rect
+        .is_some_and(|rect| rect.contains(&window.mouse_position()));
+    let anchor = shell
+        .viewport
+        .as_ref()
+        .and_then(|viewport| viewport.read(cx).tool_finish_anchor())
+        .unwrap_or_else(|| shell.dialog_anchor(window, cx));
+    // Bottom-right of the anchor, clear of the ghost without needing a direction set: a
+    // creation tool has no triad to keep the pill out of.
+    let follow = place_finish_with(anchor, None, None, None, 46.0, viewport, pill);
+    let origin = if hovered {
+        shell.hud_lock.unwrap_or(follow)
+    } else {
+        follow
+    };
+    let origin = clamp_hud(origin, viewport, pill);
+    shell.hud_lock = Some(origin);
+    let weak = cx.weak_entity();
+    let measured = div()
+        .on_children_prepainted(move |bounds, _window, cx| {
+            if let Some(rect) = bounds.first().copied() {
+                let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
+            }
+        })
+        .child(tool_buttons(cx));
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(origin)
+            .child(measured),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// The shared decision strip for an armed tool (see [`tool_finish_overlay`]).
+///
+/// The ids are the ones the docked pair used (`tool-cancel`, `tool-finish`), so a test
+/// drives the floating pair exactly as it drove the row's, and the key routes are
+/// unchanged: `Esc` is [`Shell::cancel_tool`], `Enter` is [`Shell::finish_active_tool`].
+pub(super) fn tool_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
+    ferrocad_widgets::decision_pill(
+        ferrocad_widgets::DecisionButton::cancel(
+            "tool-cancel",
+            "✗",
+            cx.listener(|this, _event, _window, cx| {
+                this.cancel_tool(cx);
+            }),
+        ),
+        ferrocad_widgets::DecisionButton::accept(
+            "tool-finish",
+            "✓",
+            cx.listener(|this, _event, _window, cx| {
+                this.finish_active_tool(cx);
+            }),
+        ),
+        ferrocad_widgets::DecisionOptions {
+            outer_id: Some("tool-finish-pill".into()),
+            // A tool owns the pointer while it is armed, so a right-press here names no
+            // verb: the radial is suppressed until the session ends.
+            on_right_press: None,
+        },
+    )
+}
+
 /// The Move coordinate form, docked with the loadout at the bottom-left of the canvas.
 ///
 /// `[Δ|XYZ]  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm` — one shape, no compact/expanded morphing: the

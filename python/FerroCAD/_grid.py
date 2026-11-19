@@ -57,6 +57,9 @@ PREFERENCES = "User parameter:BaseApp/Preferences/Mods/%s/%s" % (FEATURE, BACKEN
 LEGACY_PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
 DEFAULT_ENABLED = False
+#: The grid's default ink. The Rust tokens are `ferrocad_theme::draw::GRID_INK` and
+#: `ferrocad_theme::ui::GRID_INK`; this literal is the Python mirror of the same hex,
+#: and `tests/test_grid_api.py` pins it. A stored `FerroCAD.Grid.color` wins.
 DEFAULT_COLOR = "#94a3b8"
 DEFAULT_OPACITY = 1.0
 DEFAULT_ADAPTIVE = True
@@ -316,6 +319,28 @@ def _read(spec: dict):
 def _write(spec: dict, value) -> None:
     """Store one schema value in the provider group."""
     _store(_prefs(), spec, value)
+
+
+def stored(name: str):
+    """The value this store holds for schema entry ``name``, or ``None`` when unset.
+
+    A typed ``Get*`` cannot tell an explicit ``false`` from an absent key, so a
+    caller that has to ask *did the user ever choose this?* needs the presence
+    probe the migration and :meth:`_GridSettings.reset` already use. One such
+    caller is a backend that kept a private copy of a shared knob before the
+    routing existed (``mods/GridOverlayCoin``'s ``color``): it adopts that value
+    only when the shared store has never held one, because an explicit
+    ``#808080`` at the shared default's neighbour is still a choice.
+
+    The pre-S4 migration runs first, exactly as a read does, so a value carried
+    over from :data:`LEGACY_PREFERENCES` counts as stored.
+    """
+    spec = _SPECS[name]
+    group = _prefs()
+    _migrate(spec, group)
+    if not _present(group, spec["name"], spec["kind"]):
+        return None
+    return _read_group(group, spec["name"], spec["kind"])
 
 
 def _colour(value) -> str:

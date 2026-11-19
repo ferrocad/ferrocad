@@ -23,6 +23,7 @@ import FreeCAD
 import FreeCADGui
 import FerroCAD
 import FerroCADGui
+from FerroCAD import _grid
 
 MOD_DIR = (
     pathlib.Path(__file__).resolve().parents[1] / "mods" / "GridOverlayCoin"
@@ -162,8 +163,9 @@ def _build_fake_coin():
     module.SoShaderParameterArray1f = _FakeFloatArrayNode
     module._registered = []
 
-    def add_overlay(node):
+    def add_overlay(node, role=None):
         module._registered.append(node)
+        module.last_role = role
 
     def remove_overlay(node):
         for index, candidate in enumerate(module._registered):
@@ -233,6 +235,9 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.mod.SETTINGS.Clear()
         self.mod.manager.remove_grid()
         self.mod.manager.items.clear()
+        # The private-colour adoption is a one-shot module flag; reset it so a test
+        # that seeds a private value sees the migration rather than a stale "done".
+        self.mod._ADOPTED_PRIVATE_COLOR = False
         COIN._registered.clear()
 
     def tearDown(self):
@@ -291,7 +296,12 @@ class GridOverlayCoinTests(unittest.TestCase):
         fields = {field["name"]: field for field in spec["fields"]}
         self.assertEqual(set(fields), KNOBS)
         self.assertEqual(fields["enabled"]["value"], True)
-        self.assertEqual(fields["color"]["value"], "#808080")
+        self.assertEqual(
+            fields["color"]["value"],
+            FerroCAD.Grid.color,
+            "the ink is the shared `FerroCAD.Grid.color`, not a private #808080",
+        )
+        self.assertEqual(fields["color"]["value"], "#94a3b8", "the theme default")
         self.assertAlmostEqual(fields["opacity"]["value"], 0.4)
         # `base_spacing` is the shader's ladder unit and now follows the shared
         # `FerroCAD.Grid.minor` (10 mm by default), not a private 1.0.
@@ -313,7 +323,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         FerroCAD.Grid.minor_style = "lines"
         FerroCAD.Grid.major_width = 3.0
         FerroCAD.Grid.minor_width = 2.0
-        self.mod.SETTINGS.SetString("color", "#123456")
+        FerroCAD.Grid.color = "#123456"
         # `opacity` is the shared grid knob: the host resolves both backends' ink from
         # it, so the mod's own parameter is no longer the authority.
         FerroCAD.Grid.opacity = 0.5
@@ -368,6 +378,9 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertTrue(view["grid_overlay"], "the overlay hides the native ground")
         self.assertTrue(self.mod.setting("enabled"))
         self.assertEqual(self.mod.setting("color"), "#f87171")
+        self.assertEqual(
+            FerroCAD.Grid.color, "#f87171", "the dialog edit reached the shared store"
+        )
         self.assertAlmostEqual(self.mod.setting("opacity"), 0.5)
         self.assertAlmostEqual(self.mod.setting("base_spacing"), 2.0)
         self.assertFalse(self.mod.setting("adaptive"))
@@ -381,7 +394,8 @@ class GridOverlayCoinTests(unittest.TestCase):
     def test_a_bad_color_raises_and_leaves_the_store_alone(self):
         with self.assertRaises(ValueError):
             self.fallback_spec()["on_accept"]({"color": "not a colour"})
-        self.assertEqual(self.mod.setting("color"), "#808080")
+        self.assertEqual(self.mod.setting("color"), FerroCAD.Grid.color)
+        self.assertEqual(FerroCAD.Grid.color, "#94a3b8", "still the untouched default")
 
     def test_a_build_without_the_bridge_reports_instead_of_crashing(self):
         with mock.patch.object(self.mod, "overlay_api", return_value=None):
@@ -440,10 +454,10 @@ class GridOverlayCoinTests(unittest.TestCase):
             add.reset_mock()
             remove.reset_mock()
 
-            # The spacing is the shared `FerroCAD.Grid` knob when the semantic API
-            # exists (the private key is only the upstream fallback).
+            # The spacing and the ink are the shared `FerroCAD.Grid` knobs when the
+            # semantic API exists (the private keys are only the upstream fallback).
             FerroCAD.Grid.minor = 2.0
-            self.mod.SETTINGS.SetString("color", "#ff0000")
+            FerroCAD.Grid.color = "#ff0000"
             grid.apply_settings()
 
             remove.assert_called_once_with(grid.root)
@@ -569,6 +583,55 @@ class GridOverlayCoinTests(unittest.TestCase):
         rows["grid_axes"]["set"](False)
         self.assertFalse(self.mod.setting("grid_axes"))
         self.assertFalse(rows["grid_axes"]["get"]())
+
+    def test_the_ink_is_the_shared_grid_colour(self):
+        """`color` is a `FerroCAD.Grid` knob: one ink, whichever backend draws.
+
+        Colour was the one *shared* row this backend kept private, so a
+        ``FerroCAD.Grid.color`` write — the Settings tree, the console, an edition's
+        appearance preset, and the theme token behind all three — reached the native
+        ground and stopped there. The private key is only the upstream fallback.
+        """
+        FerroCAD.Grid.color = "#112233"
+        self.mod.SETTINGS.SetString("color", "#ff0000")
+        self.assertEqual(self.mod.setting("color"), "#112233", "the shared ink wins")
+
+        self.mod.save_settings({"color": "#445566"})
+        self.assertEqual(FerroCAD.Grid.color, "#445566")
+        self.assertEqual(
+            self.mod.SETTINGS.GetString("color", ""),
+            "#ff0000",
+            "a shared write leaves the dead fallback key alone",
+        )
+
+    def test_a_private_colour_is_adopted_once_when_the_shared_store_is_unset(self):
+        """The pre-routing value moves into the shared store instead of vanishing."""
+        FerroCAD.Grid.reset()
+        self.assertIsNone(_grid.stored("color"), "the shared store is empty")
+        self.mod.SETTINGS.SetString("color", "#ff8000")
+        self.mod._ADOPTED_PRIVATE_COLOR = False
+
+        self.assertEqual(self.mod.setting("color"), "#ff8000")
+        self.assertEqual(FerroCAD.Grid.color, "#ff8000")
+        self.assertNotIn("color", self.mod.SETTINGS.GetStrings(), "one knob, one key")
+
+        # The shared store is the only authority now: nothing re-adopts the old key.
+        FerroCAD.Grid.color = "#94a3b8"
+        self.mod._ADOPTED_PRIVATE_COLOR = False
+        self.assertEqual(self.mod.setting("color"), "#94a3b8")
+
+    def test_a_stored_shared_colour_wins_over_the_private_one(self):
+        """An explicit shared choice is never overwritten by the old private key."""
+        FerroCAD.Grid.color = "#0a0b0c"
+        self.mod.SETTINGS.SetString("color", "#ff8000")
+        self.mod._ADOPTED_PRIVATE_COLOR = False
+
+        self.assertEqual(self.mod.setting("color"), "#0a0b0c")
+        self.assertEqual(
+            self.mod.SETTINGS.GetString("color", ""),
+            "#ff8000",
+            "the dead value is left for the user rather than deleted",
+        )
 
     def test_the_mod_uses_no_qt_and_no_live_scene_graph(self):
         for name in ("QtCore", "QtGui", "QtWidgets", "QDialog", "QSettings"):
